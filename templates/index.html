@@ -1,0 +1,865 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>SSL Tools</title>
+    <style>
+        * { box-sizing: border-box; }
+        body { font-family: sans-serif; max-width: 900px; margin: 0 auto; padding: 0 20px 40px; color: #222; }
+        header { border-bottom: 2px solid #eee; margin-bottom: 20px; }
+        header h1 { margin: 20px 0 10px; font-size: 20px; }
+        nav { display: flex; gap: 4px; }
+        nav a {
+            padding: 10px 18px; text-decoration: none; color: #555;
+            border: 1px solid transparent; border-bottom: none;
+            border-radius: 6px 6px 0 0; margin-bottom: -2px; cursor: pointer;
+        }
+        nav a:hover { color: #000; }
+        nav a.active { color: #000; background: #fff; border-color: #eee; border-bottom: 2px solid #fff; font-weight: bold; }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+
+        .step { border: 1px solid #ccc; border-radius: 8px; padding: 16px; margin-bottom: 20px; }
+        .step h2 { margin-top: 0; font-size: 16px; color: #333; }
+        input[type="text"], textarea {
+            width: 100%; padding: 8px; margin: 4px 0;
+            font-family: monospace; font-size: 12px;
+        }
+        textarea { resize: vertical; }
+        button { padding: 8px 20px; cursor: pointer; }
+        button:disabled { opacity: 0.5; cursor: not-allowed; }
+        button.small { padding: 2px 10px; font-size: 12px; }
+        table { width: 100%; border-collapse: collapse; margin: 10px 0; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; font-size: 13px; word-break: break-all; vertical-align: top; }
+        th { background: #f5f5f5; }
+        .status { margin-top: 10px; font-weight: bold; }
+        .status.green { color: green; }
+        .status.red { color: red; }
+        .status.orange { color: orange; }
+        #log { background: #fafafa; border: 1px solid #eee; padding: 10px; font-family: monospace; font-size: 12px; max-height: 200px; overflow-y: auto; }
+
+        /* Chain visualization */
+        .chain-viz {
+            display: flex; align-items: center; justify-content: center;
+            gap: 6px; margin: 24px 0; flex-wrap: wrap;
+        }
+        .chain-node {
+            padding: 12px 18px; border-radius: 8px; border: 2px solid #ccc;
+            text-align: center; min-width: 130px; font-size: 12px; background: #fff;
+        }
+        .chain-node.ok { border-color: #2e7d32; background: #e8f5e9; }
+        .chain-node.bad { border-color: #c62828; background: #ffebee; }
+        .chain-node.root { border-style: dashed; }
+        .chain-node.unknown { border-style: dotted; opacity: 0.45; }
+        .chain-node-label { font-weight: bold; font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; color: #666; }
+        .chain-node-name { margin-top: 3px; word-break: break-all; }
+        .chain-arrow { font-size: 22px; color: #bbb; user-select: none; }
+        .chain-arrow.ok { color: #2e7d32; }
+        .chain-arrow.bad { color: #c62828; }
+        .chain-arrow.none { color: #ddd; }
+
+        .verify-details table td:first-child { width: 200px; color: #666; }
+        .verify-details ul { margin: 6px 0 16px; padding-left: 20px; }
+        .verify-details h3 { margin: 20px 0 8px; font-size: 14px; color: #333; border-bottom: 1px solid #eee; padding-bottom: 4px; }
+        .tag-ok { color: #2e7d32; font-weight: bold; }
+        .tag-bad { color: #c62828; font-weight: bold; }
+        .tag-warn { color: #f57c00; font-weight: bold; }
+        .err-list { list-style: none; padding: 0; margin: 8px 0; }
+        .err-list li { padding: 8px 12px; margin: 4px 0; border-radius: 4px; font-size: 13px; }
+        .err-list li.err { background: #ffebee; color: #c62828; border-left: 3px solid #c62828; }
+        .err-list li.warn { background: #fff8e1; color: #e65100; border-left: 3px solid #f57c00; }
+
+	.conv-tab {
+	    padding: 6px 16px; font-size: 13px; cursor: pointer;
+	    border: 1px solid #ccc; background: #f5f5f5; border-radius: 6px;
+	    color: #333;
+	}
+	.conv-tab.active { background: #fff; border-color: #333; font-weight: bold; color: #000; }
+	.conv-content { display: none; }
+	.conv-content.active { display: block; }
+	.btn-download {
+	    display: inline-block; padding: 8px 18px; background: #1976d2; color: #fff;
+	    text-decoration: none; border-radius: 4px; font-size: 13px;
+	}
+	.btn-download:hover { background: #1565c0; }
+    </style>
+</head>
+<body>
+
+<header>
+    <h1>SSL Tools</h1>
+    <nav>
+        <a href="#issue" class="tab active" data-tab="issue">Issue certificate</a>
+        <a href="#verify" class="tab" data-tab="verify">Verify certificate</a>
+        <a href="#live" class="tab" data-tab="live">Check live certificate</a>
+	<a href="#convert" class="tab" data-tab="convert">Convert</a>
+    </nav>
+</header>
+
+<!-- ===================== ISSUE ===================== -->
+<section id="tab-issue" class="tab-content active">
+
+    <div class="step" id="step1">
+        <h2>1. Enter domains</h2>
+        <label>Domains (comma-separated):</label>
+        <input type="text" id="domains" placeholder="example.com, *.example.com">
+        <br><br>
+        <button id="btnCreate" onclick="createRequest()">Create request</button>
+    </div>
+
+    <div class="step" id="step2" style="display:none">
+        <h2>2. Add TXT records to DNS</h2>
+        <table id="tokensTable">
+            <thead><tr><th>Record name (FQDN)</th><th>TXT value</th></tr></thead>
+            <tbody></tbody>
+        </table>
+        <button id="btnCheck" onclick="checkDNS()">Check DNS</button>
+        <div class="status" id="dnsStatus"></div>
+    </div>
+
+    <div class="step" id="step3" style="display:none">
+        <h2>3. Issue certificate</h2>
+        <button id="btnIssue" onclick="issueCert()" disabled>Get certificate</button>
+        <div class="status" id="issueStatus"></div>
+
+        <div id="result" style="display:none; margin-top:16px;">
+            <div style="margin-bottom:12px;">
+                <label><b>Certificate (leaf)</b>
+                    <button type="button" class="small" onclick="copyField('outCert')">copy</button>
+                </label>
+                <textarea id="outCert" readonly rows="8"></textarea>
+            </div>
+
+            <div style="margin-bottom:12px;">
+                <label><b>Intermediate chain</b>
+                    <button type="button" class="small" onclick="copyField('outChain')">copy</button>
+                </label>
+                <textarea id="outChain" readonly rows="8"></textarea>
+            </div>
+
+            <div style="margin-bottom:12px;">
+                <label><b>Private key</b>
+                    <button type="button" class="small" onclick="copyField('outKey')">copy</button>
+                </label>
+                <textarea id="outKey" readonly rows="8"></textarea>
+            </div>
+        </div>
+    </div>
+
+    <div class="step">
+        <h2>Log</h2>
+        <div id="log"></div>
+    </div>
+</section>
+
+<!-- ===================== VERIFY ===================== -->
+<section id="tab-verify" class="tab-content">
+    <div class="step">
+        <h2>Certificate verification</h2>
+        <p style="font-size:13px; color:#666; margin-top:0;">
+            Paste the certificate (leaf), its intermediate chain, and the private key.
+            Chain and key are optional - but without them full verification is not possible.
+        </p>
+
+        <label><b>Certificate (leaf)</b></label>
+        <textarea id="vCert" rows="6" placeholder="-----BEGIN CERTIFICATE----- ..."></textarea>
+
+        <label><b>Intermediate chain</b> (optional)</label>
+        <textarea id="vChain" rows="6" placeholder="-----BEGIN CERTIFICATE----- ..."></textarea>
+
+        <label><b>Private key</b> (optional)</label>
+        <textarea id="vKey" rows="6" placeholder="-----BEGIN ... PRIVATE KEY----- ..."></textarea>
+
+        <br>
+        <button id="btnVerify" onclick="runVerify()">Verify</button>
+        <button type="button" onclick="clearVerify()">Clear</button>
+        <div class="status" id="verifyStatus"></div>
+    </div>
+
+    <div id="verifyResult" style="display:none;"></div>
+</section>
+
+<!-- ===================== LIVE ===================== -->
+<section id="tab-live" class="tab-content">
+    <div class="step">
+        <h2>Check certificate installed on a live host</h2>
+        <p style="font-size:13px; color:#666; margin-top:0;">
+            Enter a hostname (optionally with a port). The server will be contacted on port 443
+            (or the port you provide), and the certificate chain it presents will be analysed.
+        </p>
+
+        <label><b>Hostname</b></label>
+        <input type="text" id="liveHost" placeholder="example.com or example.com:8443">
+
+        <br><br>
+        <button id="btnLive" onclick="runLiveCheck()">Check</button>
+        <div class="status" id="liveStatus"></div>
+    </div>
+
+    <div id="liveResult" style="display:none;"></div>
+</section>
+
+<!-- ===================== CONVERT ===================== -->
+<section id="tab-convert" class="tab-content">
+
+    <div class="step">
+        <h2>Convert certificates</h2>
+        <div style="display:flex; gap:6px;">
+            <button type="button" class="conv-tab active" data-conv="pfx2pem"
+                    onclick="activateConv('pfx2pem')">PFX → PEM</button>
+            <button type="button" class="conv-tab" data-conv="pem2pfx"
+                    onclick="activateConv('pem2pfx')">PEM → PFX</button>
+        </div>
+    </div>
+
+    <!-- ---------- PFX to PEM ---------- -->
+    <div id="conv-pfx2pem" class="conv-content active">
+        <div class="step">
+            <h2>PFX → PEM</h2>
+	    <p style="font-size:13px; color:#666; margin-top:0;">
+		Upload a PFX/P12 file to extract the private key, the leaf certificate
+		and the CA chain.<br>
+		Accepts binary DER (<code>.pfx</code>/<code>.p12</code>) <b>and</b> base64-encoded
+		text files (as produced by <code>keytool</code>, ESET, <code>certutil -encode</code>, etc.).
+	    </p>
+            <label><b>PFX file</b></label>
+            <input type="file" id="pfxFile"
+                   accept=".pfx,.p12,.txt,application/x-pkcs12,application/octet-stream,text/plain">
+            <div id="pfxFileName" style="font-size:12px; color:#666; margin-top:4px;"></div>
+
+            <label style="display:block; margin-top:12px;"><b>Password</b></label>
+            <input type="password" id="pfxPass" placeholder="PFX password" autocomplete="off">
+
+            <br><br>
+            <button id="btnPfx2Pem" onclick="runPfx2Pem()">Convert</button>
+            <div class="status" id="pfx2pemStatus"></div>
+        </div>
+
+        <div id="pfx2pemResult" style="display:none;">
+            <div class="step">
+                <label style="display:block;"><b>Private key</b>
+                    <button type="button" class="small" onclick="copyField('outPfxKey')">copy</button>
+                    <button type="button" class="small" onclick="downloadField('outPfxKey','private.key')">download</button>
+                </label>
+                <textarea id="outPfxKey" readonly rows="8"></textarea>
+
+                <label style="display:block; margin-top:12px;"><b>Certificate (leaf)</b>
+                    <button type="button" class="small" onclick="copyField('outPfxCert')">copy</button>
+                    <button type="button" class="small" onclick="downloadField('outPfxCert','certificate.crt')">download</button>
+                </label>
+                <textarea id="outPfxCert" readonly rows="8"></textarea>
+
+                <label style="display:block; margin-top:12px;"><b>CA chain</b>
+                    <button type="button" class="small" onclick="copyField('outPfxChain')">copy</button>
+                    <button type="button" class="small" onclick="downloadField('outPfxChain','ca_bundle.crt')">download</button>
+                </label>
+                <textarea id="outPfxChain" readonly rows="8"></textarea>
+            </div>
+        </div>
+    </div>
+
+    <!-- ---------- PEM to PFX ---------- -->
+    <div id="conv-pem2pfx" class="conv-content">
+        <div class="step">
+            <h2>PEM → PFX</h2>
+            <p style="font-size:13px; color:#666; margin-top:0;">
+                Paste the private key, the leaf certificate and (optionally) the CA chain.
+            </p>
+
+            <label><b>Private key</b></label>
+            <textarea id="inKey" rows="6" placeholder="-----BEGIN PRIVATE KEY----- ..."></textarea>
+
+            <label><b>Certificate (leaf)</b></label>
+            <textarea id="inCert" rows="6" placeholder="-----BEGIN CERTIFICATE----- ..."></textarea>
+
+            <label><b>CA chain</b> (optional)</label>
+            <textarea id="inChain" rows="6" placeholder="-----BEGIN CERTIFICATE----- ..."></textarea>
+
+            <label><b>Password</b></label>
+            <input type="password" id="outPass" placeholder="Password for the PFX file" autocomplete="new-password">
+
+	    <label><b>Confirm password</b></label>
+	    <input type="password" id="outPassConfirm" placeholder="Confirm password" autocomplete="new-password">
+
+	    <label style="display:block; margin-top:12px;"><b>Output format</b></label>
+	    <label style="font-weight:normal; font-size:13px;">
+		<input type="radio" name="pfxFormat" value="binary" checked> Binary .pfx (DER)
+	    </label>
+	    <label style="font-weight:normal; font-size:13px; margin-left:16px;">
+		<input type="radio" name="pfxFormat" value="base64"> Base64 text (.pfx.txt)
+	    </label>
+
+	    <br><br>
+	    <button id="btnPem2Pfx" onclick="runPem2Pfx()">Convert</button>
+
+            <div class="status" id="pem2pfxStatus"></div>
+            <div id="pem2pfxDownload" style="margin-top:12px;"></div>
+        </div>
+    </div>
+
+    <div class="step">
+        <h2>Log</h2>
+        <div id="convLog"></div>
+    </div>
+</section>
+
+<script>
+    // ---------- Tabs ----------
+    function activateTab(name) {
+        document.querySelectorAll('.tab').forEach(t => {
+            t.classList.toggle('active', t.dataset.tab === name);
+        });
+        document.querySelectorAll('.tab-content').forEach(c => {
+            c.classList.toggle('active', c.id === 'tab-' + name);
+        });
+    }
+
+    document.querySelectorAll('.tab').forEach(t => {
+        t.addEventListener('click', e => {
+            e.preventDefault();
+            const name = t.dataset.tab;
+            history.replaceState(null, '', '#' + name);
+            activateTab(name);
+        });
+    });
+
+    (function initTab() {
+        const h = (location.hash || '').replace('#', '');
+        activateTab(['verify', 'live', 'convert'].includes(h) ? h : 'issue');
+    })();
+
+    // ---------- Helpers ----------
+    function log(msg) {
+        const el = document.getElementById('log');
+        el.innerHTML += msg + '<br>';
+        el.scrollTop = el.scrollHeight;
+    }
+
+    function setStatus(id, text, cls) {
+        const el = document.getElementById(id);
+        el.textContent = text;
+        el.className = 'status ' + (cls || '');
+    }
+
+    function copyField(id) {
+        const el = document.getElementById(id);
+        el.select();
+        document.execCommand('copy');
+        window.getSelection().removeAllRanges();
+    }
+
+    function escapeHtml(s) {
+        if (s == null) return '';
+        return String(s).replace(/[&<>"']/g, c => ({
+            '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+        }[c]));
+    }
+
+    function fmtDate(iso) {
+        try { return new Date(iso).toLocaleString(); }
+        catch { return iso; }
+    }
+
+    // ---------- Issue ----------
+    let sessionId = null;
+
+    async function createRequest() {
+        const domains = document.getElementById('domains').value;
+        const btn = document.getElementById('btnCreate');
+        btn.disabled = true;
+        setStatus('dnsStatus', 'Creating request...', 'orange');
+
+        try {
+            const res = await fetch('/api/create', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({domains})
+            });
+            const data = await res.json();
+            if (data.error) throw new Error(data.error);
+
+            sessionId = data.session_id;
+            const tbody = document.querySelector('#tokensTable tbody');
+            tbody.innerHTML = '';
+            data.tokens.forEach(t => {
+                tbody.innerHTML += `<tr><td>${escapeHtml(t.fqdn)}</td><td>${escapeHtml(t.value)}</td></tr>`;
+            });
+
+            document.getElementById('step2').style.display = 'block';
+            document.getElementById('step3').style.display = 'block';
+            setStatus('dnsStatus', 'Records received. Add them to DNS.', 'orange');
+            log('Tokens received. Add the TXT records and click "Check DNS".');
+        } catch (e) {
+            setStatus('dnsStatus', 'Error: ' + e.message, 'red');
+            log('Error: ' + e.message);
+        } finally {
+            btn.disabled = false;
+        }
+    }
+
+    async function checkDNS() {
+        const btn = document.getElementById('btnCheck');
+        btn.disabled = true;
+        setStatus('dnsStatus', 'Checking DNS...', 'orange');
+        log('DNS check started...');
+
+        try {
+            const res = await fetch('/api/check', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({session_id: sessionId})
+            });
+            const data = await res.json();
+            if (data.success) {
+                setStatus('dnsStatus', 'All records found! You can now issue the certificate.', 'green');
+                document.getElementById('btnIssue').disabled = false;
+                log('DNS records successfully propagated.');
+            } else {
+                setStatus('dnsStatus', data.message, 'red');
+                log('Check failed: ' + data.message);
+                btn.disabled = false;
+            }
+        } catch (e) {
+            setStatus('dnsStatus', 'Error: ' + e.message, 'red');
+            btn.disabled = false;
+        }
+    }
+
+    async function issueCert() {
+        const btn = document.getElementById('btnIssue');
+        btn.disabled = true;
+        setStatus('issueStatus', 'Requesting certificate...', 'orange');
+
+        try {
+            const res = await fetch('/api/issue', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({session_id: sessionId})
+            });
+            const data = await res.json();
+            if (!data.success) throw new Error(data.error || 'Unknown error');
+
+            document.getElementById('outCert').value = data.certificate;
+            document.getElementById('outChain').value = data.chain;
+            document.getElementById('outKey').value = data.private_key;
+            document.getElementById('result').style.display = 'block';
+
+            setStatus('issueStatus', 'Done! Copy the three parts into your panel.', 'green');
+            log('Certificate issued.');
+        } catch (e) {
+            setStatus('issueStatus', 'Error: ' + e.message, 'red');
+            log('Issue error: ' + e.message);
+        } finally {
+            btn.disabled = false;
+        }
+    }
+
+    // ---------- Verify ----------
+    function clearVerify() {
+        document.getElementById('vCert').value = '';
+        document.getElementById('vChain').value = '';
+        document.getElementById('vKey').value = '';
+        document.getElementById('verifyResult').style.display = 'none';
+        setStatus('verifyStatus', '', '');
+    }
+
+    async function runVerify() {
+        const cert = document.getElementById('vCert').value;
+        const chain = document.getElementById('vChain').value;
+        const key = document.getElementById('vKey').value;
+        const btn = document.getElementById('btnVerify');
+        btn.disabled = true;
+        setStatus('verifyStatus', 'Verifying...', 'orange');
+
+        try {
+            const res = await fetch('/api/verify', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({certificate: cert, chain: chain, private_key: key})
+            });
+            const data = await res.json();
+            renderVerifyResult(data);
+
+            if (data.success) {
+                setStatus('verifyStatus', 'OK', 'green');
+            } else {
+                setStatus('verifyStatus', 'Issues detected', 'red');
+            }
+        } catch (e) {
+            setStatus('verifyStatus', 'Error: ' + e.message, 'red');
+        } finally {
+            btn.disabled = false;
+        }
+    }
+
+    async function runLiveCheck() {
+        const host = document.getElementById('liveHost').value.trim();
+        const btn = document.getElementById('btnLive');
+        if (!host) {
+            setStatus('liveStatus', 'Enter a hostname', 'red');
+            return;
+        }
+        btn.disabled = true;
+        setStatus('liveStatus', 'Connecting...', 'orange');
+
+        try {
+            const res = await fetch('/api/check_live', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({hostname: host})
+            });
+            const data = await res.json();
+            renderVerifyResult(data, 'liveResult');
+
+            if (data.success) {
+                setStatus('liveStatus', 'OK', 'green');
+            } else {
+                setStatus('liveStatus', 'Issues detected', 'red');
+            }
+        } catch (e) {
+            setStatus('liveStatus', 'Error: ' + e.message, 'red');
+        } finally {
+            btn.disabled = false;
+        }
+    }
+
+    function renderVerifyResult(data, targetId) {
+        const el = document.getElementById(targetId || 'verifyResult');
+        const c = data.certificate;
+        const chain = data.chain || {};
+
+        let html = '';
+
+        // --- Chain visualization ---
+        html += '<div class="step"><h2>Chain</h2>';
+        html += '<div class="chain-viz">';
+
+        if (c) {
+            const leafOk = !c.expired && !c.not_yet_valid;
+            html += chainNode('Leaf', c.subject_cn, leafOk ? 'ok' : 'bad');
+        }
+
+        const links = chain.links || [];
+
+        if (links.length > 0) {
+            links.forEach((link, i) => {
+                html += `<div class="chain-arrow ${link.verified ? 'ok' : 'bad'}">→</div>`;
+                const isLast = i === links.length - 1;
+                const isSelf = link.from === link.to;
+                const node = (chain.nodes || [])[i + 1];
+                const label = node ? node.label : (isLast ? 'Root' : 'Intermediate');
+                const name  = node ? node.name : link.to;
+                const ok    = link.verified;
+                const cls   = (label === 'Root' ? 'root ' : '') + (ok ? 'ok' : 'bad');
+                html += chainNode(label, name, cls);
+            });
+        } else {
+            html += '<div class="chain-arrow none">-></div>';
+            html += chainNode('Intermediate', 'not provided', 'unknown', true);
+        }
+
+        html += '</div>'; // chain-viz
+        html += '</div>';
+
+        // --- Errors / warnings ---
+        if ((data.errors && data.errors.length) || (data.warnings && data.warnings.length)) {
+            html += '<div class="step"><h2>Issues</h2><ul class="err-list">';
+            (data.errors || []).forEach(e => {
+                html += `<li class="err">${escapeHtml(e)}</li>`;
+            });
+            (data.warnings || []).forEach(w => {
+                html += `<li class="warn">${escapeHtml(w)}</li>`;
+            });
+            html += '</ul></div>';
+        }
+
+        // --- Connection (for live-check) ---
+        if (data.connection) {
+            const c = data.connection;
+            html += '<div class="step verify-details"><h2>Connection</h2><table>';
+            html += row('Host', c.hostname + ':' + c.port);
+            html += row('TLS version', c.tls_version || '—');
+            if (c.cipher) {
+                html += row('Cipher', `${c.cipher.name} (${c.cipher.bits} bits, ${c.cipher.protocol})`);
+            }
+            html += rowHtml('Trusted by system CA',
+                c.verify_ok
+                    ? '<span class="tag-ok">yes</span>'
+                    : `<span class="tag-bad">no</span>`);
+            if (!c.verify_ok && c.verify_error) {
+                html += rowHtml('Verification error',
+                    `<span class="tag-bad">${escapeHtml(c.verify_error)}</span>`);
+            }
+            html += '</table></div>';
+        }
+
+        // --- Details ---
+        html += '<div class="step verify-details"><h2>Details</h2>';
+
+        if (c) {
+            html += '<h3>Certificate</h3><table>';
+            html += row('Subject', c.subject);
+            html += row('Issuer', c.issuer);
+            html += row('Valid from', fmtDate(c.not_before));
+            html += row('Valid until', fmtDate(c.not_after));
+            const daysCls = c.expired ? 'tag-bad' : (c.days_left < 14 ? 'tag-warn' : 'tag-ok');
+            html += rowHtml('Days left',
+                `<span class="${daysCls}">${c.days_left}</span>`);
+            html += row('Serial', c.serial);
+            html += row('Signature algorithm', c.signature_algorithm);
+            html += row('Is CA', c.is_ca ? 'yes' : 'no');
+            html += '</table>';
+
+            html += '<h3>Domains covered</h3><ul>';
+            if (c.domains && c.domains.length) {
+                c.domains.forEach(d => html += `<li>${escapeHtml(d)}</li>`);
+            } else {
+                html += '<li style="color:#999">none</li>';
+            }
+            html += '</ul>';
+        }
+
+        if (data.key) {
+            html += '<h3>Private key</h3><table>';
+            if (data.key.type) html += row('Type', data.key.type);
+            if ('matches_certificate' in data.key) {
+                html += rowHtml('Matches certificate',
+                    data.key.matches_certificate
+                        ? '<span class="tag-ok">yes</span>'
+                        : '<span class="tag-bad">no</span>');
+            }
+            if (data.key.error) {
+                html += rowHtml('Error', `<span class="tag-bad">${escapeHtml(data.key.error)}</span>`);
+            }
+            html += '</table>';
+        }
+
+        if (chain && chain.length !== undefined) {
+            html += '<h3>Chain</h3><table>';
+            html += row('Certificates in chain', chain.length);
+            html += rowHtml('Valid',
+                chain.valid
+                    ? '<span class="tag-ok">yes</span>'
+                    : '<span class="tag-bad">no</span>');
+            html += rowHtml('Ends with self-signed root',
+                chain.complete
+                    ? '<span class="tag-ok">yes</span>'
+                    : '<span class="tag-warn">no (cross-signed — normal for LE)</span>');
+            html += '</table>';
+
+            if (chain.certificates && chain.certificates.length) {
+                html += '<h3>Chain contents</h3><table>';
+                html += '<thead><tr><th>#</th><th>Subject</th><th>Issuer</th></tr></thead><tbody>';
+                chain.certificates.forEach((c, i) => {
+                    html += `<tr>
+                        <td>${i + 1}</td>
+                        <td>${escapeHtml(c.subject)}</td>
+                        <td>${escapeHtml(c.issuer)}</td>
+                    </tr>`;
+                });
+                html += '</tbody></table>';
+            }
+        }
+
+        html += '</div>';
+
+        el.innerHTML = html;
+        el.style.display = 'block';
+    }
+
+    function row(label, value) {
+        return rowHtml(label, escapeHtml(value));
+    }
+
+    function rowHtml(label, htmlValue) {
+        return `<tr><td>${escapeHtml(label)}</td><td>${htmlValue}</td></tr>`;
+    }
+
+    function chainNode(label, name, cls, unknown) {
+        const classes = 'chain-node ' + (cls || '') + (unknown ? ' unknown' : '');
+        const nameHtml = name ? `<div class="chain-node-name">${escapeHtml(name)}</div>` : '';
+        return `<div class="${classes}">
+            <div class="chain-node-label">${escapeHtml(label)}</div>
+            ${nameHtml}
+        </div>`;
+    }
+
+// ---------- Convert ----------
+function activateConv(name) {
+    document.querySelectorAll('.conv-tab').forEach(t => {
+        t.classList.toggle('active', t.dataset.conv === name);
+    });
+    document.querySelectorAll('.conv-content').forEach(c => {
+        c.classList.toggle('active', c.id === 'conv-' + name);
+    });
+}
+
+function convLog(msg) {
+    const el = document.getElementById('convLog');
+    if (!el) return;
+    el.innerHTML += msg + '<br>';
+    el.scrollTop = el.scrollHeight;
+}
+
+function downloadField(id, filename) {
+    const text = document.getElementById(id).value;
+    if (!text) return;
+    downloadBlob(new Blob([text], {type: 'application/x-pem-file'}), filename);
+}
+
+function downloadBlob(blob, filename) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+}
+
+function base64ToBlob(b64, mime) {
+    const bin = atob(b64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return new Blob([bytes], {type: mime});
+}
+
+function fileToBase64(file) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+            const result = reader.result;
+            const idx = result.indexOf(',');
+            resolve(result.slice(idx + 1));
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+    });
+}
+
+(function wirePfxFileInput() {
+    const inp = document.getElementById('pfxFile');
+    if (!inp) return;
+    inp.addEventListener('change', e => {
+        const f = e.target.files[0];
+        document.getElementById('pfxFileName').textContent =
+            f ? `${f.name} (${f.size} bytes)` : '';
+    });
+})();
+
+let pendingPfxBlob = null;
+
+async function runPfx2Pem() {
+    const file = document.getElementById('pfxFile').files[0];
+    if (!file) {
+        setStatus('pfx2pemStatus', 'Select a PFX file', 'red');
+        return;
+    }
+    const password = document.getElementById('pfxPass').value;
+    const btn = document.getElementById('btnPfx2Pem');
+    btn.disabled = true;
+    setStatus('pfx2pemStatus', 'Converting...', 'orange');
+    convLog('Reading ' + file.name);
+
+    try {
+        const b64 = await fileToBase64(file);
+        const res = await fetch('/api/convert/pfx2pem', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({pfx: b64, password})
+        });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.error || 'Conversion failed');
+
+        document.getElementById('outPfxKey').value   = data.private_key || '';
+        document.getElementById('outPfxCert').value  = data.certificate || '';
+        document.getElementById('outPfxChain').value = data.chain || '';
+        document.getElementById('pfx2pemResult').style.display = 'block';
+
+        setStatus('pfx2pemStatus', 'Done', 'green');
+        convLog('Extracted: ' +
+            (data.private_key ? 'key ' : '') +
+            (data.certificate ? 'cert ' : '') +
+            (data.chain ? 'chain' : ''));
+    } catch (e) {
+        setStatus('pfx2pemStatus', 'Error: ' + e.message, 'red');
+        convLog('Error: ' + e.message);
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+async function runPem2Pfx() {
+    const key     = document.getElementById('inKey').value;
+    const cert    = document.getElementById('inCert').value;
+    const chain   = document.getElementById('inChain').value;
+    const pass    = document.getElementById('outPass').value;
+    const confirm = document.getElementById('outPassConfirm').value;
+    const btn     = document.getElementById('btnPem2Pfx');
+
+    const format = (document.querySelector('input[name="pfxFormat"]:checked') || {}).value || 'binary';
+
+    if (!key.trim() || !cert.trim()) {
+        setStatus('pem2pfxStatus', 'Key and certificate are required', 'red');
+        return;
+    }
+    if (pass !== confirm) {
+        setStatus('pem2pfxStatus', 'Passwords do not match', 'red');
+        return;
+    }
+
+    btn.disabled = true;
+    setStatus('pem2pfxStatus', 'Converting...', 'orange');
+    convLog('Building PFX (' + format + ')...');
+
+    try {
+        const res = await fetch('/api/convert/pem2pfx', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                private_key: key,
+                certificate: cert,
+                chain: chain,
+                password: pass,
+                password_confirm: confirm,
+                output_format: format
+            })
+        });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.error || 'Conversion failed');
+
+        const wrap = document.getElementById('pem2pfxDownload');
+
+        if (format === 'base64') {
+            const textBlob = new Blob([data.pfx_text], {type: 'text/plain'});
+            pendingPfxBlob = textBlob;
+            pendingPfxName = 'certificate.pfx.txt';
+        } else {
+            pendingPfxBlob = base64ToBlob(data.pfx_b64, 'application/x-pkcs12');
+            pendingPfxName = 'certificate.pfx';
+        }
+
+        wrap.innerHTML =
+            `<button type="button" class="btn-download" onclick="downloadPendingPfx()">
+                Download ${pendingPfxName} (${data.size} bytes)
+             </button>`;
+
+        setStatus('pem2pfxStatus', 'Done', 'green');
+        convLog('PFX built: ' + data.size + ' bytes, format=' + format);
+    } catch (e) {
+        setStatus('pem2pfxStatus', 'Error: ' + e.message, 'red');
+        convLog('Error: ' + e.message);
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+let pendingPfxName = 'certificate.pfx';
+
+function downloadPendingPfx() {
+    if (pendingPfxBlob) downloadBlob(pendingPfxBlob, pendingPfxName);
+}
+</script>
+</body>
+</html>
