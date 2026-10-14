@@ -8,7 +8,7 @@
         body { font-family: sans-serif; max-width: 900px; margin: 0 auto; padding: 0 20px 40px; color: #222; }
         header { border-bottom: 2px solid #eee; margin-bottom: 20px; }
         header h1 { margin: 20px 0 10px; font-size: 20px; }
-        nav { display: flex; gap: 4px; }
+        nav { display: flex; gap: 4px; flex-wrap: wrap; }
         nav a {
             padding: 10px 18px; text-decoration: none; color: #555;
             border: 1px solid transparent; border-bottom: none;
@@ -21,10 +21,11 @@
 
         .step { border: 1px solid #ccc; border-radius: 8px; padding: 16px; margin-bottom: 20px; }
         .step h2 { margin-top: 0; font-size: 16px; color: #333; }
-        input[type="text"], textarea {
+        input[type="text"], input[type="password"], textarea {
             width: 100%; padding: 8px; margin: 4px 0;
             font-family: monospace; font-size: 12px;
         }
+        input[type="file"] { margin: 4px 0; font-size: 13px; }
         textarea { resize: vertical; }
         button { padding: 8px 20px; cursor: pointer; }
         button:disabled { opacity: 0.5; cursor: not-allowed; }
@@ -36,7 +37,7 @@
         .status.green { color: green; }
         .status.red { color: red; }
         .status.orange { color: orange; }
-        #log { background: #fafafa; border: 1px solid #eee; padding: 10px; font-family: monospace; font-size: 12px; max-height: 200px; overflow-y: auto; }
+        #log, #convLog { background: #fafafa; border: 1px solid #eee; padding: 10px; font-family: monospace; font-size: 12px; max-height: 200px; overflow-y: auto; }
 
         /* Chain visualization */
         .chain-viz {
@@ -69,19 +70,20 @@
         .err-list li.err { background: #ffebee; color: #c62828; border-left: 3px solid #c62828; }
         .err-list li.warn { background: #fff8e1; color: #e65100; border-left: 3px solid #f57c00; }
 
-	.conv-tab {
-	    padding: 6px 16px; font-size: 13px; cursor: pointer;
-	    border: 1px solid #ccc; background: #f5f5f5; border-radius: 6px;
-	    color: #333;
-	}
-	.conv-tab.active { background: #fff; border-color: #333; font-weight: bold; color: #000; }
-	.conv-content { display: none; }
-	.conv-content.active { display: block; }
-	.btn-download {
-	    display: inline-block; padding: 8px 18px; background: #1976d2; color: #fff;
-	    text-decoration: none; border-radius: 4px; font-size: 13px;
-	}
-	.btn-download:hover { background: #1565c0; }
+        /* Convert: format grid */
+        .format-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+            gap: 6px;
+        }
+        .format-grid label {
+            padding: 10px 12px; border: 1px solid #ddd; border-radius: 6px;
+            cursor: pointer; font-size: 13px; display: flex; align-items: flex-start; gap: 8px;
+        }
+        .format-grid label:hover { background: #f5f5f5; border-color: #bbb; }
+        .format-grid label input { margin-top: 2px; }
+        .format-grid .fmt-desc { display: block; color: #888; font-size: 11px; margin-top: 3px; }
+        .format-grid label.selected { background: #e3f2fd; border-color: #1976d2; }
     </style>
 </head>
 <body>
@@ -92,7 +94,7 @@
         <a href="#issue" class="tab active" data-tab="issue">Issue certificate</a>
         <a href="#verify" class="tab" data-tab="verify">Verify certificate</a>
         <a href="#live" class="tab" data-tab="live">Check live certificate</a>
-	<a href="#convert" class="tab" data-tab="convert">Convert</a>
+        <a href="#convert" class="tab" data-tab="convert">Convert</a>
     </nav>
 </header>
 
@@ -202,99 +204,93 @@
 <!-- ===================== CONVERT ===================== -->
 <section id="tab-convert" class="tab-content">
 
+    <!-- Step 1: input -->
     <div class="step">
-        <h2>Convert certificates</h2>
-        <div style="display:flex; gap:6px;">
-            <button type="button" class="conv-tab active" data-conv="pfx2pem"
-                    onclick="activateConv('pfx2pem')">PFX → PEM</button>
-            <button type="button" class="conv-tab" data-conv="pem2pfx"
-                    onclick="activateConv('pem2pfx')">PEM → PFX</button>
-        </div>
+        <h2>1. Input</h2>
+        <p style="font-size:13px; color:#666; margin-top:0;">
+            Upload a file or paste its content. Supported: PEM, DER, PFX/P12,
+            PKCS#7/P7B, base64-encoded text. The format is detected automatically.
+        </p>
+
+        <label><b>File</b></label>
+        <input type="file" id="convFile" accept="*/*">
+        <div id="convFileName" style="font-size:12px; color:#666; margin-top:4px;"></div>
+
+        <label style="display:block; margin-top:12px;"><b>Or paste content</b></label>
+        <textarea id="convText" rows="6" placeholder="-----BEGIN CERTIFICATE----- ..."></textarea>
+
+        <label style="display:block; margin-top:12px;"><b>Input password</b> (if encrypted)</label>
+        <input type="password" id="convPass" placeholder="Password for PFX or encrypted key" autocomplete="off">
+
+        <br><br>
+        <button id="btnInspect" onclick="runInspect()">Inspect</button>
+        <button type="button" onclick="clearConvert()">Clear</button>
+        <div class="status" id="inspectStatus"></div>
     </div>
 
-    <!-- ---------- PFX to PEM ---------- -->
-    <div id="conv-pfx2pem" class="conv-content active">
-        <div class="step">
-            <h2>PFX → PEM</h2>
-	    <p style="font-size:13px; color:#666; margin-top:0;">
-		Upload a PFX/P12 file to extract the private key, the leaf certificate
-		and the CA chain.<br>
-		Accepts binary DER (<code>.pfx</code>/<code>.p12</code>) <b>and</b> base64-encoded
-		text files (as produced by <code>keytool</code>, ESET, <code>certutil -encode</code>, etc.).
-	    </p>
-            <label><b>PFX file</b></label>
-            <input type="file" id="pfxFile"
-                   accept=".pfx,.p12,.txt,application/x-pkcs12,application/octet-stream,text/plain">
-            <div id="pfxFileName" style="font-size:12px; color:#666; margin-top:4px;"></div>
-
-            <label style="display:block; margin-top:12px;"><b>Password</b></label>
-            <input type="password" id="pfxPass" placeholder="PFX password" autocomplete="off">
-
-            <br><br>
-            <button id="btnPfx2Pem" onclick="runPfx2Pem()">Convert</button>
-            <div class="status" id="pfx2pemStatus"></div>
-        </div>
-
-        <div id="pfx2pemResult" style="display:none;">
-            <div class="step">
-                <label style="display:block;"><b>Private key</b>
-                    <button type="button" class="small" onclick="copyField('outPfxKey')">copy</button>
-                    <button type="button" class="small" onclick="downloadField('outPfxKey','private.key')">download</button>
-                </label>
-                <textarea id="outPfxKey" readonly rows="8"></textarea>
-
-                <label style="display:block; margin-top:12px;"><b>Certificate (leaf)</b>
-                    <button type="button" class="small" onclick="copyField('outPfxCert')">copy</button>
-                    <button type="button" class="small" onclick="downloadField('outPfxCert','certificate.crt')">download</button>
-                </label>
-                <textarea id="outPfxCert" readonly rows="8"></textarea>
-
-                <label style="display:block; margin-top:12px;"><b>CA chain</b>
-                    <button type="button" class="small" onclick="copyField('outPfxChain')">copy</button>
-                    <button type="button" class="small" onclick="downloadField('outPfxChain','ca_bundle.crt')">download</button>
-                </label>
-                <textarea id="outPfxChain" readonly rows="8"></textarea>
-            </div>
-        </div>
+    <!-- Step 2: detected -->
+    <div class="step" id="step-detected" style="display:none;">
+        <h2>2. Detected</h2>
+        <div id="detectedContent"></div>
     </div>
 
-    <!-- ---------- PEM to PFX ---------- -->
-    <div id="conv-pem2pfx" class="conv-content">
-        <div class="step">
-            <h2>PEM → PFX</h2>
-            <p style="font-size:13px; color:#666; margin-top:0;">
-                Paste the private key, the leaf certificate and (optionally) the CA chain.
-            </p>
+    <!-- Step 3: output -->
+    <div class="step" id="step-output" style="display:none;">
+        <h2>3. Output format</h2>
+        <div class="format-grid" id="formatGrid">
+            <label><input type="radio" name="outFormat" value="pem-separate" checked>
+                <span>PEM - separate files<span class="fmt-desc">certificate.crt, chain.crt, private.key - nginx / Apache</span></span></label>
 
-            <label><b>Private key</b></label>
-            <textarea id="inKey" rows="6" placeholder="-----BEGIN PRIVATE KEY----- ..."></textarea>
+            <label><input type="radio" name="outFormat" value="pem-fullchain">
+                <span>PEM - fullchain + key<span class="fmt-desc">fullchain.pem + privkey.pem - certbot style</span></span></label>
 
-            <label><b>Certificate (leaf)</b></label>
-            <textarea id="inCert" rows="6" placeholder="-----BEGIN CERTIFICATE----- ..."></textarea>
+            <label><input type="radio" name="outFormat" value="pem-bundle">
+                <span>PEM - single bundle<span class="fmt-desc">cert + chain + key in one file - haproxy / stunnel</span></span></label>
 
-            <label><b>CA chain</b> (optional)</label>
-            <textarea id="inChain" rows="6" placeholder="-----BEGIN CERTIFICATE----- ..."></textarea>
+            <label><input type="radio" name="outFormat" value="pem-cert-chain">
+                <span>PEM - cert + chain only<span class="fmt-desc">fullchain.pem without private key</span></span></label>
 
-            <label><b>Password</b></label>
-            <input type="password" id="outPass" placeholder="Password for the PFX file" autocomplete="new-password">
+            <label><input type="radio" name="outFormat" value="der">
+                <span>DER - certificate only<span class="fmt-desc">binary .der</span></span></label>
 
-	    <label><b>Confirm password</b></label>
-	    <input type="password" id="outPassConfirm" placeholder="Confirm password" autocomplete="new-password">
+            <label><input type="radio" name="outFormat" value="pkcs7">
+                <span>PKCS#7 / P7B - binary<span class="fmt-desc">cert + chain as .p7b</span></span></label>
 
-	    <label style="display:block; margin-top:12px;"><b>Output format</b></label>
-	    <label style="font-weight:normal; font-size:13px;">
-		<input type="radio" name="pfxFormat" value="binary" checked> Binary .pfx (DER)
-	    </label>
-	    <label style="font-weight:normal; font-size:13px; margin-left:16px;">
-		<input type="radio" name="pfxFormat" value="base64"> Base64 text (.pfx.txt)
-	    </label>
+            <label><input type="radio" name="outFormat" value="pkcs7-pem">
+                <span>PKCS#7 / P7B - PEM<span class="fmt-desc">cert + chain as PEM-wrapped P7B</span></span></label>
 
-	    <br><br>
-	    <button id="btnPem2Pfx" onclick="runPem2Pfx()">Convert</button>
+            <label><input type="radio" name="outFormat" value="pfx">
+                <span>PFX / PKCS#12<span class="fmt-desc">Windows / IIS / Tomcat - password required</span></span></label>
 
-            <div class="status" id="pem2pfxStatus"></div>
-            <div id="pem2pfxDownload" style="margin-top:12px;"></div>
+            <label><input type="radio" name="outFormat" value="pfx-b64">
+                <span>PFX / PKCS#12 - base64 text<span class="fmt-desc">as produced by keytool / certutil -encode</span></span></label>
+
+            <label><input type="radio" name="outFormat" value="pubkey-pem">
+                <span>Public key - PEM<span class="fmt-desc">SPKI public key</span></span></label>
+
+            <label><input type="radio" name="outFormat" value="pubkey-openssh">
+                <span>Public key - OpenSSH<span class="fmt-desc">ssh-rsa AAAA...</span></span></label>
+
+            <label><input type="radio" name="outFormat" value="key-pkcs1">
+                <span>Private key - PKCS#1<span class="fmt-desc">RSA traditional format</span></span></label>
         </div>
+
+        <div id="outPassWrap" style="display:none; margin-top:16px; padding:12px; background:#fff8e1; border-radius:6px;">
+            <label><b>Output password</b></label>
+            <input type="password" id="outConvPass" autocomplete="new-password">
+            <label style="display:block; margin-top:8px;"><b>Confirm password</b></label>
+            <input type="password" id="outConvPassConfirm" autocomplete="new-password">
+        </div>
+
+        <br>
+        <button id="btnConvert" onclick="runConvert()">Convert</button>
+        <div class="status" id="convertStatus"></div>
+    </div>
+
+    <!-- Step 4: result -->
+    <div class="step" id="step-result" style="display:none;">
+        <h2>4. Result</h2>
+        <div id="convertFiles"></div>
     </div>
 
     <div class="step">
@@ -335,6 +331,13 @@
         el.scrollTop = el.scrollHeight;
     }
 
+    function convLog(msg) {
+        const el = document.getElementById('convLog');
+        if (!el) return;
+        el.innerHTML += msg + '<br>';
+        el.scrollTop = el.scrollHeight;
+    }
+
     function setStatus(id, text, cls) {
         const el = document.getElementById(id);
         el.textContent = text;
@@ -358,6 +361,36 @@
     function fmtDate(iso) {
         try { return new Date(iso).toLocaleString(); }
         catch { return iso; }
+    }
+
+    function downloadBlob(blob, filename) {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(url), 2000);
+    }
+
+    function b64ToBlob(b64, mime) {
+        const bin = atob(b64);
+        const bytes = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        return new Blob([bytes], {type: mime});
+    }
+
+    function fileToBase64(file) {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => {
+                const idx = reader.result.indexOf(',');
+                resolve(reader.result.slice(idx + 1));
+            };
+            reader.onerror = reject;
+            reader.readAsDataURL(file);
+        });
     }
 
     // ---------- Issue ----------
@@ -530,7 +563,7 @@
 
         let html = '';
 
-        // --- Chain visualization ---
+        // Chain visualization
         html += '<div class="step"><h2>Chain</h2>';
         html += '<div class="chain-viz">';
 
@@ -545,7 +578,6 @@
             links.forEach((link, i) => {
                 html += `<div class="chain-arrow ${link.verified ? 'ok' : 'bad'}">→</div>`;
                 const isLast = i === links.length - 1;
-                const isSelf = link.from === link.to;
                 const node = (chain.nodes || [])[i + 1];
                 const label = node ? node.label : (isLast ? 'Root' : 'Intermediate');
                 const name  = node ? node.name : link.to;
@@ -554,14 +586,13 @@
                 html += chainNode(label, name, cls);
             });
         } else {
-            html += '<div class="chain-arrow none">-></div>';
+            html += '<div class="chain-arrow none">-&gt;</div>';
             html += chainNode('Intermediate', 'not provided', 'unknown', true);
         }
 
-        html += '</div>'; // chain-viz
-        html += '</div>';
+        html += '</div></div>';
 
-        // --- Errors / warnings ---
+        // Errors / warnings
         if ((data.errors && data.errors.length) || (data.warnings && data.warnings.length)) {
             html += '<div class="step"><h2>Issues</h2><ul class="err-list">';
             (data.errors || []).forEach(e => {
@@ -573,27 +604,27 @@
             html += '</ul></div>';
         }
 
-        // --- Connection (for live-check) ---
+        // Connection
         if (data.connection) {
-            const c = data.connection;
+            const cc = data.connection;
             html += '<div class="step verify-details"><h2>Connection</h2><table>';
-            html += row('Host', c.hostname + ':' + c.port);
-            html += row('TLS version', c.tls_version || '—');
-            if (c.cipher) {
-                html += row('Cipher', `${c.cipher.name} (${c.cipher.bits} bits, ${c.cipher.protocol})`);
+            html += row('Host', cc.hostname + ':' + cc.port);
+            html += row('TLS version', cc.tls_version || '—');
+            if (cc.cipher) {
+                html += row('Cipher', `${cc.cipher.name} (${cc.cipher.bits} bits, ${cc.cipher.protocol})`);
             }
             html += rowHtml('Trusted by system CA',
-                c.verify_ok
+                cc.verify_ok
                     ? '<span class="tag-ok">yes</span>'
-                    : `<span class="tag-bad">no</span>`);
-            if (!c.verify_ok && c.verify_error) {
+                    : '<span class="tag-bad">no</span>');
+            if (!cc.verify_ok && cc.verify_error) {
                 html += rowHtml('Verification error',
-                    `<span class="tag-bad">${escapeHtml(c.verify_error)}</span>`);
+                    `<span class="tag-bad">${escapeHtml(cc.verify_error)}</span>`);
             }
             html += '</table></div>';
         }
 
-        // --- Details ---
+        // Details
         html += '<div class="step verify-details"><h2>Details</h2>';
 
         if (c) {
@@ -644,17 +675,17 @@
             html += rowHtml('Ends with self-signed root',
                 chain.complete
                     ? '<span class="tag-ok">yes</span>'
-                    : '<span class="tag-warn">no (cross-signed — normal for LE)</span>');
+                    : '<span class="tag-warn">no (cross-signed - normal for LE)</span>');
             html += '</table>';
 
             if (chain.certificates && chain.certificates.length) {
                 html += '<h3>Chain contents</h3><table>';
                 html += '<thead><tr><th>#</th><th>Subject</th><th>Issuer</th></tr></thead><tbody>';
-                chain.certificates.forEach((c, i) => {
+                chain.certificates.forEach((cc, i) => {
                     html += `<tr>
                         <td>${i + 1}</td>
-                        <td>${escapeHtml(c.subject)}</td>
-                        <td>${escapeHtml(c.issuer)}</td>
+                        <td>${escapeHtml(cc.subject)}</td>
+                        <td>${escapeHtml(cc.issuer)}</td>
                     </tr>`;
                 });
                 html += '</tbody></table>';
@@ -684,182 +715,220 @@
         </div>`;
     }
 
-// ---------- Convert ----------
-function activateConv(name) {
-    document.querySelectorAll('.conv-tab').forEach(t => {
-        t.classList.toggle('active', t.dataset.conv === name);
-    });
-    document.querySelectorAll('.conv-content').forEach(c => {
-        c.classList.toggle('active', c.id === 'conv-' + name);
-    });
-}
+    // ---------- Convert ----------
+    let convFileB64 = null;
 
-function convLog(msg) {
-    const el = document.getElementById('convLog');
-    if (!el) return;
-    el.innerHTML += msg + '<br>';
-    el.scrollTop = el.scrollHeight;
-}
-
-function downloadField(id, filename) {
-    const text = document.getElementById(id).value;
-    if (!text) return;
-    downloadBlob(new Blob([text], {type: 'application/x-pem-file'}), filename);
-}
-
-function downloadBlob(blob, filename) {
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    setTimeout(() => URL.revokeObjectURL(url), 2000);
-}
-
-function base64ToBlob(b64, mime) {
-    const bin = atob(b64);
-    const bytes = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-    return new Blob([bytes], {type: mime});
-}
-
-function fileToBase64(file) {
-    return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => {
-            const result = reader.result;
-            const idx = result.indexOf(',');
-            resolve(result.slice(idx + 1));
-        };
-        reader.onerror = reject;
-        reader.readAsDataURL(file);
-    });
-}
-
-(function wirePfxFileInput() {
-    const inp = document.getElementById('pfxFile');
-    if (!inp) return;
-    inp.addEventListener('change', e => {
+    document.getElementById('convFile').addEventListener('change', e => {
         const f = e.target.files[0];
-        document.getElementById('pfxFileName').textContent =
-            f ? `${f.name} (${f.size} bytes)` : '';
+        if (!f) {
+            convFileB64 = null;
+            document.getElementById('convFileName').textContent = '';
+            return;
+        }
+        convFileB64 = null;
+        fileToBase64(f).then(b64 => { convFileB64 = b64; });
+        document.getElementById('convFileName').textContent = `${f.name} (${f.size} bytes)`;
+        document.getElementById('convText').value = '';
     });
-})();
 
-let pendingPfxBlob = null;
+    document.getElementById('convText').addEventListener('input', e => {
+        if (e.target.value.trim()) {
+            document.getElementById('convFile').value = '';
+            document.getElementById('convFileName').textContent = '';
+            convFileB64 = null;
+        }
+    });
 
-async function runPfx2Pem() {
-    const file = document.getElementById('pfxFile').files[0];
-    if (!file) {
-        setStatus('pfx2pemStatus', 'Select a PFX file', 'red');
-        return;
-    }
-    const password = document.getElementById('pfxPass').value;
-    const btn = document.getElementById('btnPfx2Pem');
-    btn.disabled = true;
-    setStatus('pfx2pemStatus', 'Converting...', 'orange');
-    convLog('Reading ' + file.name);
-
-    try {
-        const b64 = await fileToBase64(file);
-        const res = await fetch('/api/convert/pfx2pem', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({pfx: b64, password})
+    document.querySelectorAll('input[name="outFormat"]').forEach(r => {
+        r.addEventListener('change', () => {
+            const isPfx = r.value === 'pfx';
+            document.getElementById('outPassWrap').style.display = isPfx ? 'block' : 'none';
+            document.querySelectorAll('.format-grid label').forEach(l => {
+                const inp = l.querySelector('input');
+                l.classList.toggle('selected', inp && inp.checked);
+            });
         });
-        const data = await res.json();
-        if (!data.success) throw new Error(data.error || 'Conversion failed');
+    });
 
-        document.getElementById('outPfxKey').value   = data.private_key || '';
-        document.getElementById('outPfxCert').value  = data.certificate || '';
-        document.getElementById('outPfxChain').value = data.chain || '';
-        document.getElementById('pfx2pemResult').style.display = 'block';
-
-        setStatus('pfx2pemStatus', 'Done', 'green');
-        convLog('Extracted: ' +
-            (data.private_key ? 'key ' : '') +
-            (data.certificate ? 'cert ' : '') +
-            (data.chain ? 'chain' : ''));
-    } catch (e) {
-        setStatus('pfx2pemStatus', 'Error: ' + e.message, 'red');
-        convLog('Error: ' + e.message);
-    } finally {
-        btn.disabled = false;
-    }
-}
-
-async function runPem2Pfx() {
-    const key     = document.getElementById('inKey').value;
-    const cert    = document.getElementById('inCert').value;
-    const chain   = document.getElementById('inChain').value;
-    const pass    = document.getElementById('outPass').value;
-    const confirm = document.getElementById('outPassConfirm').value;
-    const btn     = document.getElementById('btnPem2Pfx');
-
-    const format = (document.querySelector('input[name="pfxFormat"]:checked') || {}).value || 'binary';
-
-    if (!key.trim() || !cert.trim()) {
-        setStatus('pem2pfxStatus', 'Key and certificate are required', 'red');
-        return;
-    }
-    if (pass !== confirm) {
-        setStatus('pem2pfxStatus', 'Passwords do not match', 'red');
-        return;
-    }
-
-    btn.disabled = true;
-    setStatus('pem2pfxStatus', 'Converting...', 'orange');
-    convLog('Building PFX (' + format + ')...');
-
-    try {
-        const res = await fetch('/api/convert/pem2pfx', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({
-                private_key: key,
-                certificate: cert,
-                chain: chain,
-                password: pass,
-                password_confirm: confirm,
-                output_format: format
-            })
-        });
-        const data = await res.json();
-        if (!data.success) throw new Error(data.error || 'Conversion failed');
-
-        const wrap = document.getElementById('pem2pfxDownload');
-
-        if (format === 'base64') {
-            const textBlob = new Blob([data.pfx_text], {type: 'text/plain'});
-            pendingPfxBlob = textBlob;
-            pendingPfxName = 'certificate.pfx.txt';
+    function buildConvertPayload() {
+        const text = document.getElementById('convText').value;
+        const password = document.getElementById('convPass').value;
+        const payload = {password};
+        if (convFileB64) {
+            payload.input_b64 = convFileB64;
+        } else if (text.trim()) {
+            payload.input_text = text;
         } else {
-            pendingPfxBlob = base64ToBlob(data.pfx_b64, 'application/x-pkcs12');
-            pendingPfxName = 'certificate.pfx';
+            throw new Error('Provide a file or paste content');
+        }
+        return payload;
+    }
+
+    function clearConvert() {
+        document.getElementById('convFile').value = '';
+        document.getElementById('convFileName').textContent = '';
+        document.getElementById('convText').value = '';
+        document.getElementById('convPass').value = '';
+        document.getElementById('outConvPass').value = '';
+        document.getElementById('outConvPassConfirm').value = '';
+        document.getElementById('step-detected').style.display = 'none';
+        document.getElementById('step-output').style.display = 'none';
+        document.getElementById('step-result').style.display = 'none';
+        document.getElementById('outPassWrap').style.display = 'none';
+        setStatus('inspectStatus', '', '');
+        setStatus('convertStatus', '', '');
+        convFileB64 = null;
+    }
+
+    async function runInspect() {
+        let payload;
+        try { payload = buildConvertPayload(); }
+        catch (e) { setStatus('inspectStatus', e.message, 'red'); return; }
+
+        const btn = document.getElementById('btnInspect');
+        btn.disabled = true;
+        setStatus('inspectStatus', 'Inspecting...', 'orange');
+        convLog('Inspecting input...');
+
+        try {
+            const res = await fetch('/api/convert/inspect', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(payload)
+            });
+            const data = await res.json();
+            if (!data.success) throw new Error(data.error || 'Inspection failed');
+
+            renderInspect(data);
+            setStatus('inspectStatus', 'Detected: ' + data.source_format, 'green');
+            convLog('Source format: ' + data.source_format);
+            document.getElementById('step-detected').style.display = 'block';
+            document.getElementById('step-output').style.display = 'block';
+            document.getElementById('step-result').style.display = 'none';
+        } catch (e) {
+            setStatus('inspectStatus', 'Error: ' + e.message, 'red');
+            convLog('Error: ' + e.message);
+        } finally {
+            btn.disabled = false;
+        }
+    }
+
+    function renderInspect(data) {
+        let html = '<table>';
+        html += `<tr><td>Source format</td><td><b>${escapeHtml(data.source_format)}</b></td></tr>`;
+        html += `<tr><td>Private key</td><td>${data.has_private_key
+            ? '<span class="tag-ok">yes</span> (' + escapeHtml(data.key_type || '') + ')'
+            : '<span class="tag-warn">no</span>'}</td></tr>`;
+        html += `<tr><td>Certificate</td><td>${data.has_certificate
+            ? '<span class="tag-ok">yes</span>'
+            : '<span class="tag-warn">no</span>'}</td></tr>`;
+
+        if (data.certificate) {
+            html += `<tr><td>&nbsp;&nbsp;Subject</td><td>${escapeHtml(data.certificate.subject_cn)}</td></tr>`;
+            html += `<tr><td>&nbsp;&nbsp;Issuer</td><td>${escapeHtml(data.certificate.issuer_cn)}</td></tr>`;
+            html += `<tr><td>&nbsp;&nbsp;Valid until</td><td>${escapeHtml(data.certificate.not_after)}</td></tr>`;
         }
 
-        wrap.innerHTML =
-            `<button type="button" class="btn-download" onclick="downloadPendingPfx()">
-                Download ${pendingPfxName} (${data.size} bytes)
-             </button>`;
+        html += `<tr><td>Chain</td><td>${data.chain_length} cert(s)</td></tr>`;
+        if (data.chain && data.chain.length) {
+            data.chain.forEach((c, i) => {
+                html += `<tr><td>&nbsp;&nbsp;#${i + 1}</td><td>${escapeHtml(c.subject_cn)} &larr; issued by ${escapeHtml(c.issuer_cn)}</td></tr>`;
+            });
+        }
 
-        setStatus('pem2pfxStatus', 'Done', 'green');
-        convLog('PFX built: ' + data.size + ' bytes, format=' + format);
-    } catch (e) {
-        setStatus('pem2pfxStatus', 'Error: ' + e.message, 'red');
-        convLog('Error: ' + e.message);
-    } finally {
-        btn.disabled = false;
+        html += `<tr><td>CSR</td><td>${data.has_csr ? 'yes' : 'no'}</td></tr>`;
+        html += `<tr><td>Public key</td><td>${data.has_public_key ? 'yes' : 'no'}</td></tr>`;
+        html += '</table>';
+
+        if (data.warnings && data.warnings.length) {
+            html += '<ul class="err-list" style="margin-top:12px;">';
+            data.warnings.forEach(w => {
+                html += `<li class="warn">${escapeHtml(w)}</li>`;
+            });
+            html += '</ul>';
+        }
+
+        document.getElementById('detectedContent').innerHTML = html;
     }
-}
 
-let pendingPfxName = 'certificate.pfx';
+    async function runConvert() {
+        let payload;
+        try { payload = buildConvertPayload(); }
+        catch (e) { setStatus('convertStatus', e.message, 'red'); return; }
 
-function downloadPendingPfx() {
-    if (pendingPfxBlob) downloadBlob(pendingPfxBlob, pendingPfxName);
-}
+        payload.target = (document.querySelector('input[name="outFormat"]:checked') || {}).value;
+        payload.output_password = document.getElementById('outConvPass').value;
+        payload.output_password_confirm = document.getElementById('outConvPassConfirm').value;
+
+        if (!payload.target) {
+            setStatus('convertStatus', 'Select an output format', 'red');
+            return;
+        }
+
+        const btn = document.getElementById('btnConvert');
+        btn.disabled = true;
+        setStatus('convertStatus', 'Converting...', 'orange');
+        convLog('Target format: ' + payload.target);
+
+        try {
+            const res = await fetch('/api/convert/output', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(payload)
+            });
+            const data = await res.json();
+            if (!data.success) throw new Error(data.error || 'Conversion failed');
+
+            renderFiles(data.files);
+            setStatus('convertStatus', 'Done - ' + data.files.length + ' file(s)', 'green');
+            convLog('Produced ' + data.files.length + ' file(s)');
+            document.getElementById('step-result').style.display = 'block';
+        } catch (e) {
+            setStatus('convertStatus', 'Error: ' + e.message, 'red');
+            convLog('Error: ' + e.message);
+        } finally {
+            btn.disabled = false;
+        }
+    }
+
+    let convOutputFiles = [];
+
+    function renderFiles(files) {
+        convOutputFiles = files;
+        let html = '';
+        files.forEach((f, i) => {
+            html += '<div style="margin-bottom:16px;">';
+            html += `<label style="display:block;"><b>${escapeHtml(f.name)}</b> <span style="color:#666; font-weight:normal;">(${f.size} bytes)</span> `;
+            html += `<button type="button" class="small" onclick="downloadConvFile(${i})">download</button>`;
+            if (f.text !== null && f.text !== undefined) {
+                html += ` <button type="button" class="small" onclick="copyConvFile(${i})">copy</button>`;
+            }
+            html += '</label>';
+
+            if (f.text !== null && f.text !== undefined && f.text.length < 65536) {
+                html += `<textarea id="convFile_${i}" readonly rows="8">${escapeHtml(f.text)}</textarea>`;
+            } else {
+                html += '<div style="color:#666; font-size:12px; padding:8px; background:#fafafa; border:1px solid #eee;">Binary file - use the download button</div>';
+            }
+            html += '</div>';
+        });
+        document.getElementById('convertFiles').innerHTML = html;
+    }
+
+    function downloadConvFile(idx) {
+        const f = convOutputFiles[idx];
+        if (!f) return;
+        const blob = b64ToBlob(f.b64, 'application/octet-stream');
+        downloadBlob(blob, f.name);
+    }
+
+    function copyConvFile(idx) {
+        const el = document.getElementById('convFile_' + idx);
+        if (!el) return;
+        el.select();
+        document.execCommand('copy');
+        window.getSelection().removeAllRanges();
+    }
 </script>
 </body>
 </html>

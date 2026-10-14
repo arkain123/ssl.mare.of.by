@@ -2,7 +2,7 @@
 
 A web-based toolkit for working with TLS/SSL certificates. Runs as a local Flask
 service and covers three common tasks: issuing certificates, verifying them, and
-converting between formats — without touching the command line or remembering
+converting between formats - without touching the command line or remembering
 openssl flags.
 
 ## Features
@@ -27,11 +27,13 @@ Connect to a remote host and inspect what it actually serves:
 - full certificate chain presented by the server
 - trust verification against the system CA store
 
-### Convert certificates (in progress)
-Universal format converter:
-- **input (auto-detected):** PEM, DER, PFX/P12, P7B, base64-encoded text
-- **output:** PEM (separate files or single bundle), PFX (modern or legacy),
-  DER, P7B
+### Convert certificates
+Universal format converter with automatic input detection:
+- **input (auto-detected):** PEM (all block types), DER, PFX/P12 (binary and
+  base64 text), PKCS#7/P7B (DER and PEM), base64-encoded wrappers
+- **output:** PEM (separate files, fullchain, bundle, cert+chain only), DER,
+  PKCS#7/P7B (binary and PEM), PFX/PKCS#12 (AES and base64 text), public key
+  (PEM and OpenSSH), private key in PKCS#1
 - focused on what real web servers expect: nginx, Apache, haproxy, IIS, Tomcat
 
 ## Stack
@@ -45,6 +47,7 @@ Universal format converter:
 ## Requirements
 
 - Python 3.10+
+- `cryptography` >= 42.0 (required for PKCS#7 support)
 - A domain you control, with the ability to add TXT records (for issuance)
 - Outbound access to Let's Encrypt and to public DNS resolvers
 
@@ -65,7 +68,7 @@ Example `requirements.txt`:
 ```
 flask
 python-dotenv
-cryptography
+cryptography>=42.0
 simple-acme-dns
 dnspython
 ```
@@ -128,13 +131,43 @@ Then open `http://<FLASK_HOST>:<FLASK_PORT>` in a browser (by default,
 
 The UI has tabs for each task:
 
-- **Issue certificate** — enter domains, add the shown TXT records to DNS,
+- **Issue certificate** - enter domains, add the shown TXT records to DNS,
   click Check DNS, then Get certificate.
-- **Verify certificate** — paste a certificate, optional chain, and optional
+- **Verify certificate** - paste a certificate, optional chain, and optional
   private key.
-- **Check live certificate** — enter a hostname (optionally with a port) and
+- **Check live certificate** - enter a hostname (optionally with a port) and
   inspect what the server presents.
-- **Convert** — convert between supported certificate formats.
+- **Convert** - upload or paste a certificate file, click Inspect to see what
+  was detected, then pick an output format and download the result.
+
+## Convert: supported formats
+
+### Input (auto-detected)
+
+| Format                       | Notes                                              |
+|------------------------------|----------------------------------------------------|
+| PEM                          | Any block type: certs, keys, CSR, public key       |
+| DER                          | Certificate, private key, CSR, public key, PFX     |
+| PFX / PKCS#12                | Binary DER, password-protected                     |
+| PFX as base64 text           | As produced by `keytool`, `certutil -encode`, ESET |
+| PKCS#7 / P7B                 | Binary DER and PEM variants                        |
+
+### Output
+
+| Target                       | Produces                                            |
+|------------------------------|-----------------------------------------------------|
+| PEM - separate files         | `certificate.crt`, `chain.crt`, `private.key`       |
+| PEM - fullchain + key        | `fullchain.pem`, `privkey.pem` (certbot layout)     |
+| PEM - single bundle          | `bundle.pem` (cert + chain + key)                   |
+| PEM - cert + chain only      | `fullchain.pem` without private key                 |
+| DER - certificate only       | `certificate.der`                                   |
+| PKCS#7 / P7B - binary        | `certificate.p7b`                                   |
+| PKCS#7 / P7B - PEM           | `certificate.p7b.pem`                               |
+| PFX / PKCS#12                | `certificate.pfx` (AES encryption, password)        |
+| PFX - base64 text            | `certificate.pfx.txt`                               |
+| Public key - PEM             | `public.key` (SPKI)                                 |
+| Public key - OpenSSH         | `public.key` (`ssh-rsa AAAA...`)                    |
+| Private key - PKCS#1         | `private.key` (RSA traditional format)              |
 
 ## Project layout
 
@@ -143,7 +176,7 @@ The UI has tabs for each task:
 ├── app.py                # Flask app and HTTP routes
 ├── acme_manager.py       # ACME client wrapper, issuance logic
 ├── verifier.py           # Certificate parsing and chain verification
-├── converter.py          # Format conversion (PEM, DER, PFX, P7B, base64)
+├── converter.py          # Format detection, parsing, and serialization
 ├── templates/
 │   └── index.html        # Single-page UI
 ├── .env.example          # Template for local configuration
@@ -153,19 +186,66 @@ The UI has tabs for each task:
 
 ## API
 
-| Method | Endpoint                | Purpose                                  |
-|--------|-------------------------|------------------------------------------|
-| POST   | `/api/create`           | Start an ACME order, return TXT records  |
-| POST   | `/api/check`            | Verify DNS propagation for a session     |
-| POST   | `/api/issue`            | Issue the certificate                    |
-| POST   | `/api/verify`           | Verify a PEM certificate, chain, key     |
-| POST   | `/api/check_live`       | Fetch and verify a live server cert      |
-| POST   | `/api/convert/pfx2pem`  | Extract key, cert, chain from PFX        |
-| POST   | `/api/convert/pem2pfx`  | Pack PEM key, cert, chain into PFX       |
+| Method | Endpoint                | Purpose                                     |
+|--------|-------------------------|---------------------------------------------|
+| POST   | `/api/create`           | Start an ACME order, return TXT records     |
+| POST   | `/api/check`            | Verify DNS propagation for a session        |
+| POST   | `/api/issue`            | Issue the certificate                       |
+| POST   | `/api/verify`           | Verify a PEM certificate, chain, key        |
+| POST   | `/api/check_live`       | Fetch and verify a live server cert         |
+| POST   | `/api/convert/inspect`  | Detect the format and report the contents   |
+| POST   | `/api/convert/output`   | Convert to the selected target format       |
+
+Both convert endpoints accept the same input shape:
+
+```json
+{
+  "input_b64":  "base64 of the file (optional)",
+  "input_text": "or the raw text content (optional)",
+  "password":   "input password if encrypted (optional)"
+}
+```
+
+`/api/convert/output` additionally accepts:
+
+```json
+{
+  "target": "pem-separate | pem-fullchain | pem-bundle | pem-cert-chain |
+             der | pkcs7 | pkcs7-pem | pfx | pfx-b64 |
+             pubkey-pem | pubkey-openssh | key-pkcs1",
+  "output_password": "password for output PFX (optional)",
+  "output_password_confirm": "confirmation (optional)"
+}
+```
+
+Response for `/api/convert/output`:
+
+```json
+{
+  "success": true,
+  "files": [
+    { "name": "certificate.crt", "b64": "...", "size": 1234, "text": "..." }
+  ]
+}
+```
+
+`text` is present for text files (shown in the UI) and `null` for binary files
+(downloaded only).
 
 ## Security notes
 
-- Do not expose it publicly TLS in front of it.
+- Do not expose it publicly without authentication and TLS in front of it.
 - Private keys are written to disk in `certs/` in plain PEM. Protect this
   directory.
 - ACME account keys are stored in `accounts/`. Treat them as secrets.
+
+## Limitations
+
+- PFX files are written with modern AES encryption. Legacy RC2/3DES output is
+  not supported by the `cryptography` library and would require `pyOpenSSL` or
+  the `openssl` binary.
+- Encrypted PKCS#8 private keys (`-----BEGIN ENCRYPTED PRIVATE KEY-----`) are
+  accepted on input only if the correct password is supplied.
+- JKS/JCEKS keystores are not supported; convert them to PKCS#12 first with
+  `keytool -importkeystore`.
+

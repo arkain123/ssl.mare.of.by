@@ -1,15 +1,11 @@
-import base64
-import os
 import sys
 import uuid
+import base64
 import logging
-from dotenv import load_dotenv
 from flask import Flask, request, jsonify, render_template
 from acme_manager import ACMEManager
 from verifier import verify_inputs, fetch_remote_certificate
-from converter import pfx_to_pem, pem_to_pfx
-
-load_dotenv()
+from converter import parse_anything, serialize_bundle, bundle_summary
 
 logging.basicConfig(
     level=logging.INFO,
@@ -22,16 +18,38 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 manager = ACMEManager()
 
-HOST = os.getenv("FLASK_HOST", "127.0.0.1")
-PORT = int(os.getenv("FLASK_PORT", "5023"))
-DEBUG = os.getenv("FLASK_DEBUG", "false").lower() in ("1", "true", "yes")
 
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _is_text_content(name: str, content: bytes) -> bool:
+    """Decide if a produced file is safe to show in a <textarea>."""
+    if name.endswith((".der", ".pfx", ".p12", ".jks", ".keystore")):
+        return False
+    if name.endswith((".pem", ".crt", ".key", ".txt", ".csr", ".pub")):
+        return True
+    try:
+        text = content.decode("utf-8")
+    except UnicodeDecodeError:
+        return False
+    printable = sum(1 for c in text if c.isprintable() or c in "\r\n\t")
+    return printable / max(len(text), 1) > 0.9
+
+
+# ---------------------------------------------------------------------------
+# Routes - UI
+# ---------------------------------------------------------------------------
 
 @app.route("/")
 def index():
     logger.info("[http] GET / from %s", request.remote_addr)
     return render_template("index.html")
 
+
+# ---------------------------------------------------------------------------
+# Routes - ACME
+# ---------------------------------------------------------------------------
 
 @app.route("/api/create", methods=["POST"])
 def api_create():
@@ -106,6 +124,10 @@ def api_issue():
         return jsonify({"error": str(e)}), 500
 
 
+# ---------------------------------------------------------------------------
+# Routes - Verify
+# ---------------------------------------------------------------------------
+
 @app.route("/api/verify", methods=["POST"])
 def api_verify():
     data = request.get_json(silent=True) or {}
@@ -125,77 +147,6 @@ def api_verify():
     except Exception as e:
         logger.exception("[api/verify] failed: %s", e)
         return jsonify({"success": False, "errors": [str(e)]}), 500
-
-
-@app.route("/api/convert/pfx2pem", methods=["POST"])
-def api_convert_pfx2pem():
-    data = request.get_json(silent=True) or {}
-    pfx_b64 = data.get("pfx", "")
-    password = data.get("password", "")
-
-    logger.info("[api/convert/pfx2pem] payload=%d b64 chars", len(pfx_b64))
-
-    if not pfx_b64:
-        return jsonify({"success": False, "error": "PFX data is required"}), 400
-
-    try:
-        # Frontend always re-encodes the file as base64 for transport.
-        pfx_bytes = base64.b64decode(pfx_b64)
-    except Exception as e:
-        return jsonify({"success": False, "error": f"Invalid transport base64: {e}"}), 400
-
-    try:
-        # normalize_pfx_bytes() inside pfx_to_pem will handle the case
-        # where pfx_bytes is itself ASCII base64 (e.g. keytool output).
-        result = pfx_to_pem(pfx_bytes, password)
-        return jsonify({"success": True, **result})
-    except Exception as e:
-        logger.exception("[api/convert/pfx2pem] failed: %s", e)
-        return jsonify({"success": False, "error": str(e)}), 500
-
-
-@app.route("/api/convert/pem2pfx", methods=["POST"])
-def api_convert_pem2pfx():
-    data = request.get_json(silent=True) or {}
-    key_pem = data.get("private_key", "") or ""
-    cert_pem = data.get("certificate", "") or ""
-    chain_pem = data.get("chain", "") or ""
-    password = data.get("password", "") or ""
-    confirm = data.get("password_confirm", "") or ""
-    output_format = (data.get("output_format") or "binary").lower()
-
-    logger.info(
-        "[api/convert/pem2pfx] key=%d cert=%d chain=%d format=%s",
-        len(key_pem), len(cert_pem), len(chain_pem), output_format,
-    )
-
-    if not key_pem.strip():
-        return jsonify({"success": False, "error": "Private key is required"}), 400
-    if not cert_pem.strip():
-        return jsonify({"success": False, "error": "Certificate is required"}), 400
-    if password != confirm:
-        return jsonify({"success": False, "error": "Passwords do not match"}), 400
-
-    try:
-        pfx_bytes = pem_to_pfx(key_pem, cert_pem, chain_pem, password)
-    except Exception as e:
-        logger.exception("[api/convert/pem2pfx] failed: %s", e)
-        return jsonify({"success": False, "error": str(e)}), 500
-
-    payload = {
-        "success": True,
-        "size": len(pfx_bytes),
-        "output_format": output_format,
-        "pfx_b64": base64.b64encode(pfx_bytes).decode("ascii"),
-    }
-
-    if output_format == "base64":
-        # Text form - wrap at 64 chars like openssl / certutil do
-        raw_b64 = base64.b64encode(pfx_bytes).decode("ascii")
-        wrapped = "\n".join(raw_b64[i:i + 64] for i in range(0, len(raw_b64), 64))
-        payload["pfx_text"] = wrapped + "\n"
-
-    return jsonify(payload)
 
 
 @app.route("/api/check_live", methods=["POST"])
@@ -253,5 +204,95 @@ def api_check_live():
     return jsonify(result)
 
 
+# ---------------------------------------------------------------------------
+# Routes - Convert
+# ---------------------------------------------------------------------------
+
+def _read_convert_payload(data):
+    """Extract raw bytes from {'input_b64': ...} or {'input_text': ...}."""
+    raw_b64 = data.get("input_b64", "")
+    text = data.get("input_text", "")
+    if raw_b64:
+        try:
+            return base64.b64decode(raw_b64)
+        except Exception as e:
+            raise ValueError(f"Invalid base64 transport: {e}")
+    if text:
+        return text.encode("utf-8")
+    raise ValueError("Provide a file or paste text")
+
+
+@app.route("/api/convert/inspect", methods=["POST"])
+def api_convert_inspect():
+    data = request.get_json(silent=True) or {}
+    password = data.get("password", "") or ""
+
+    try:
+        raw = _read_convert_payload(data)
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 400
+
+    logger.info("[api/convert/inspect] input=%d bytes", len(raw))
+
+    try:
+        bundle = parse_anything(raw, password)
+        summary = bundle_summary(bundle)
+        logger.info("[api/convert/inspect] detected=%s", summary.get("source_format"))
+        return jsonify({"success": True, **summary})
+    except Exception as e:
+        logger.exception("[api/convert/inspect] failed: %s", e)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/convert/output", methods=["POST"])
+def api_convert_output():
+    data = request.get_json(silent=True) or {}
+    password = data.get("password", "") or ""
+    target = data.get("target", "") or ""
+    out_pw = data.get("output_password", "") or ""
+    out_pw2 = data.get("output_password_confirm", "") or ""
+
+    if not target:
+        return jsonify({"success": False, "error": "Target format is required"}), 400
+    if out_pw != out_pw2:
+        return jsonify({"success": False, "error": "Passwords do not match"}), 400
+
+    try:
+        raw = _read_convert_payload(data)
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 400
+
+    logger.info("[api/convert/output] target=%s input=%d bytes", target, len(raw))
+
+    try:
+        bundle = parse_anything(raw, password)
+    except Exception as e:
+        logger.exception("[api/convert/output] parse failed: %s", e)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+    try:
+        outputs = serialize_bundle(bundle, target, output_password=out_pw)
+    except Exception as e:
+        logger.exception("[api/convert/output] serialize failed: %s", e)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+    files = []
+    for name, content in outputs.items():
+        is_text = _is_text_content(name, content)
+        files.append({
+            "name": name,
+            "b64": base64.b64encode(content).decode("ascii"),
+            "size": len(content),
+            "text": content.decode("utf-8", errors="replace") if is_text else None,
+        })
+
+    logger.info("[api/convert/output] produced %d file(s)", len(files))
+    return jsonify({"success": True, "files": files})
+
+
 if __name__ == "__main__":
-    app.run(host=HOST, port=PORT, debug=DEBUG)
+    import os
+    host = os.environ.get("FLASK_HOST", "127.0.0.1")
+    port = int(os.environ.get("FLASK_PORT", "5023"))
+    debug = os.environ.get("FLASK_DEBUG", "false").lower() in ("1", "true", "yes")
+    app.run(host=host, port=port, debug=debug)
