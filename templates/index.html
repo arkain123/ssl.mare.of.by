@@ -167,18 +167,34 @@
         <textarea id="vCert" rows="6" placeholder="-----BEGIN CERTIFICATE----- ..."></textarea>
 
         <label><b>Intermediate chain</b> (optional)</label>
-        <textarea id="vChain" rows="6" placeholder="-----BEGIN CERTIFICATE----- ..."></textarea>
 
-        <label><b>Private key</b> (optional)</label>
-        <textarea id="vKey" rows="6" placeholder="-----BEGIN ... PRIVATE KEY----- ..."></textarea>
+        <div id="gsInjectBar" style="margin: 6px 0 8px; padding: 10px; background: #f7f9fc; border: 1px solid #e0e6ef; border-radius: 6px;">
+            <div style="font-size: 12px; color: #555; margin-bottom: 6px;">
+                <b>Inject GlobalSign intermediate</b>
+                <span style="color:#888;">- pick the right CA for your certificate</span>
+            </div>
+            <div style="display: flex; gap: 6px; flex-wrap: wrap; align-items: center;">
+                <select id="gsSelect" style="flex: 1; min-width: 240px; padding: 6px; font-size: 13px;">
+                    <option value="">Loading list...</option>
+                </select>
+                <button type="button" class="small" onclick="injectGsIntermediate()">Insert</button>
+                <button type="button" class="small" onclick="clearGsIntermediate()">Clear</button>
+            </div>
+            <div id="gsHint" style="font-size: 12px; color: #666; margin-top: 6px; min-height: 14px;"></div>
+         </div>
 
-        <br>
-        <button id="btnVerify" onclick="runVerify()">Verify</button>
-        <button type="button" onclick="clearVerify()">Clear</button>
-        <div class="status" id="verifyStatus"></div>
-    </div>
+         <textarea id="vChain" rows="6" placeholder="-----BEGIN CERTIFICATE----- ..."></textarea>
 
-    <div id="verifyResult" style="display:none;"></div>
+         <label><b>Private key</b> (optional)</label>
+         <textarea id="vKey" rows="6" placeholder="-----BEGIN ... PRIVATE KEY----- ..."></textarea>
+
+         <br>
+         <button id="btnVerify" onclick="runVerify()">Verify</button>
+         <button type="button" onclick="clearVerify()">Clear</button>
+         <div class="status" id="verifyStatus"></div>
+     </div>
+
+     <div id="verifyResult" style="display:none;"></div>
 </section>
 
 <!-- ===================== LIVE ===================== -->
@@ -929,6 +945,86 @@
         document.execCommand('copy');
         window.getSelection().removeAllRanges();
     }
+
+// ---------- GlobalSign intermediate injector ----------
+let gsCatalogLoaded = false;
+let gsCatalogById = {};
+
+async function loadGsCatalog() {
+    if (gsCatalogLoaded) return;
+    const sel = document.getElementById('gsSelect');
+    try {
+        const res = await fetch('/api/globalsign-intermediates');
+        const data = await res.json();
+        if (!data.success) throw new Error(data.error || 'Failed to load');
+
+        sel.innerHTML = '<option value="">- select an intermediate -</option>';
+        gsCatalogById = {};
+
+        data.groups.forEach(group => {
+            const og = document.createElement('optgroup');
+            og.label = group.name + ' (' + group.items.length + ')';
+            group.items.forEach(item => {
+                const opt = document.createElement('option');
+                opt.value = item.id;
+                opt.textContent = item.label + ' - ' + item.algorithm + ' - ' + item.year;
+                opt.title = item.description || '';
+                og.appendChild(opt);
+                gsCatalogById[item.id] = item;
+            });
+            sel.appendChild(og);
+        });
+
+        sel.addEventListener('change', () => {
+            const item = gsCatalogById[sel.value];
+            document.getElementById('gsHint').textContent = item ? (item.description || '') : '';
+        });
+
+        gsCatalogLoaded = true;
+    } catch (e) {
+        sel.innerHTML = '<option value="">Failed to load list</option>';
+        document.getElementById('gsHint').textContent = 'Error: ' + e.message;
+    }
+}
+
+function injectGsIntermediate() {
+    const sel = document.getElementById('gsSelect');
+    const id = sel.value;
+    if (!id) {
+        setStatus('verifyStatus', 'Pick an intermediate from the list first', 'orange');
+        return;
+    }
+    const item = gsCatalogById[id];
+    if (!item || !item.pem) {
+        setStatus('verifyStatus', 'Certificate payload missing', 'red');
+        return;
+    }
+
+    const chainEl = document.getElementById('vChain');
+    const hadContent = chainEl.value.trim().length > 0;
+    chainEl.value = item.pem.trim() + '\n';
+
+    setStatus('verifyStatus',
+        (hadContent ? 'Replaced chain with ' : 'Inserted ') + item.label,
+        'green');
+}
+
+function clearGsIntermediate() {
+    document.getElementById('vChain').value = '';
+    document.getElementById('gsSelect').value = '';
+    document.getElementById('gsHint').textContent = '';
+    setStatus('verifyStatus', '', '');
+}
+
+// Load the catalog the first time the Verify tab is opened.
+(function wireGsCatalog() {
+    const verifyTab = document.querySelector('.tab[data-tab="verify"]');
+    if (verifyTab) {
+        verifyTab.addEventListener('click', loadGsCatalog);
+    }
+    const h = (location.hash || '').replace('#', '');
+    if (h === 'verify') loadGsCatalog();
+})();
 </script>
 </body>
 </html>

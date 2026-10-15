@@ -6,6 +6,7 @@ from flask import Flask, request, jsonify, render_template
 from acme_manager import ACMEManager
 from verifier import verify_inputs, fetch_remote_certificate
 from converter import parse_anything, serialize_bundle, bundle_summary
+from globalsign_catalog import grouped_catalog
 
 logging.basicConfig(
     level=logging.INFO,
@@ -147,6 +148,15 @@ def api_verify():
     except Exception as e:
         logger.exception("[api/verify] failed: %s", e)
         return jsonify({"success": False, "errors": [str(e)]}), 500
+
+
+@app.route("/api/globalsign-intermediates", methods=["GET"])
+def api_globalsign_intermediates():
+    groups = grouped_catalog()
+    total = sum(len(g["items"]) for g in groups)
+    logger.info("[api/globalsign-intermediates] serving %d certificate(s) in %d group(s)",
+                total, len(groups))
+    return jsonify({"success": True, "groups": groups})
 
 
 @app.route("/api/check_live", methods=["POST"])
