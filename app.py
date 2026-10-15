@@ -126,6 +126,55 @@ def api_issue():
 
 
 # ---------------------------------------------------------------------------
+# Routes - Sessions (persistence)
+# ---------------------------------------------------------------------------
+
+def _session_public(session, session_id):
+    """Strip the (unserializable) client object from a session dict."""
+    return {
+        "session_id": session_id,
+        "domains": session.get("domains") or [],
+        "tokens": session.get("tokens") or {},
+        "created_at": session.get("created_at"),
+        "status": session.get("status", "pending"),
+        "has_client": session.get("client") is not None,
+    }
+
+
+@app.route("/api/sessions", methods=["GET"])
+def api_sessions_list():
+    import session_store
+    metas = session_store.list_metadata()
+    logger.info("[api/sessions] returning %d session(s)", len(metas))
+    return jsonify({"success": True, "sessions": metas})
+
+
+@app.route("/api/sessions/<session_id>", methods=["GET"])
+def api_session_get(session_id):
+    session = manager.sessions.get(session_id)
+    if not session:
+        import session_store
+        loaded = session_store.load_session(session_id)
+        if not loaded:
+            return jsonify({"success": False, "error": "Session not found"}), 404
+        # Metadata-only fallback (client was not restored)
+        logger.info("[api/sessions/%s] served from disk (no client)", session_id)
+        return jsonify({"success": True, **_session_public(loaded, session_id)})
+
+    logger.info("[api/sessions/%s] served from memory", session_id)
+    return jsonify({"success": True, **_session_public(session, session_id)})
+
+
+@app.route("/api/sessions/<session_id>", methods=["DELETE"])
+def api_session_delete(session_id):
+    import session_store
+    manager.sessions.pop(session_id, None)
+    session_store.delete_session(session_id)
+    logger.info("[api/sessions/%s] deleted", session_id)
+    return jsonify({"success": True})
+
+
+# ---------------------------------------------------------------------------
 # Routes - Verify
 # ---------------------------------------------------------------------------
 

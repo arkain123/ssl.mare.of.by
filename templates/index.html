@@ -101,6 +101,16 @@
 <!-- ===================== ISSUE ===================== -->
 <section id="tab-issue" class="tab-content active">
 
+    <div class="step" id="stepResume" style="display:none;">
+        <h2>Saved requests</h2>
+        <p style="font-size:13px; color:#666; margin-top:0;">
+            Pick a saved request to continue DNS verification or issuance.
+            Sessions are stored on the server, so a page reload or restart
+            will not lose them.
+        </p>
+        <div id="sessionsList"></div>
+    </div>
+
     <div class="step" id="step1">
         <h2>1. Enter domains</h2>
         <label>Domains (comma-separated):</label>
@@ -411,6 +421,143 @@
 
     // ---------- Issue ----------
     let sessionId = null;
+    const LS_KEY = 'ssl_tools_session_id';
+
+    function rememberSession(id) {
+        try {
+            if (id) localStorage.setItem(LS_KEY, id);
+            else localStorage.removeItem(LS_KEY);
+        } catch (e) { /* localStorage disabled */ }
+    }
+
+    function readRememberedSession() {
+        try { return localStorage.getItem(LS_KEY); }
+        catch (e) { return null; }
+    }
+
+    async function loadSavedSessions() {
+        const wrap = document.getElementById('sessionsList');
+        const step = document.getElementById('stepResume');
+        try {
+            const res = await fetch('/api/sessions');
+            const data = await res.json();
+            if (!data.success || !data.sessions || data.sessions.length === 0) {
+                step.style.display = 'none';
+                return;
+            }
+
+            step.style.display = 'block';
+            let html = '<table><thead><tr>' +
+                '<th>Created</th><th>Domains</th><th>Status</th><th>Resumable</th><th></th>' +
+                '</tr></thead><tbody>';
+
+            data.sessions.forEach(s => {
+                const created = s.created_at ? fmtDate(s.created_at) : '?';
+                const dom = (s.domains || []).join(', ');
+                const status = s.status || 'pending';
+                const resumable = s.has_client
+                    ? '<span class="tag-ok">yes</span>'
+                    : '<span class="tag-warn">metadata only</span>';
+                const sid = escapeHtml(s.session_id);
+                html += `<tr>
+                    <td>${escapeHtml(created)}</td>
+                    <td>${escapeHtml(dom)}</td>
+                    <td>${escapeHtml(status)}</td>
+                    <td>${resumable}</td>
+                    <td style="white-space:nowrap;">
+                        <button type="button" class="small" onclick="restoreSession('${sid}')">Resume</button>
+                        <button type="button" class="small" onclick="deleteSavedSession('${sid}')">Delete</button>
+                    </td>
+                </tr>`;
+            });
+            html += '</tbody></table>';
+            wrap.innerHTML = html;
+        } catch (e) {
+            step.style.display = 'none';
+            console.warn('loadSavedSessions failed:', e);
+        }
+    }
+
+    async function restoreSession(id) {
+        setStatus('dnsStatus', 'Restoring session...', 'orange');
+        try {
+            const res = await fetch('/api/sessions/' + encodeURIComponent(id));
+            const data = await res.json();
+            if (!data.success) throw new Error(data.error || 'Session not found');
+
+            sessionId = data.session_id;
+            rememberSession(sessionId);
+
+            // Repopulate domains field
+            if (data.domains && data.domains.length) {
+                document.getElementById('domains').value = data.domains.join(', ');
+            }
+
+            // Repopulate token table
+            const tbody = document.querySelector('#tokensTable tbody');
+            tbody.innerHTML = '';
+            const tokens = data.tokens || {};
+            let n = 0;
+            Object.keys(tokens).forEach(fqdn => {
+                (tokens[fqdn] || []).forEach(val => {
+                    tbody.innerHTML += `<tr><td>${escapeHtml(fqdn)}</td><td>${escapeHtml(val)}</td></tr>`;
+                    n += 1;
+                });
+            });
+
+            document.getElementById('step2').style.display = 'block';
+            document.getElementById('step3').style.display = 'block';
+
+            const issueBtn = document.getElementById('btnIssue');
+            if (data.has_client) {
+                issueBtn.disabled = true;   // require fresh DNS check first
+                setStatus('dnsStatus',
+                    'Session restored (' + n + ' TXT record(s)). Click "Check DNS" to continue.',
+                    'green');
+            } else {
+                issueBtn.disabled = true;
+                setStatus('dnsStatus',
+                    'Session restored, but the ACME client could not be recovered. ' +
+                    'Please create a new request.',
+                    'orange');
+            }
+
+            log('Restored session ' + sessionId + ' with ' + n + ' token(s).');
+            // Refresh the saved list (has_client might change)
+            loadSavedSessions();
+        } catch (e) {
+            setStatus('dnsStatus', 'Restore failed: ' + e.message, 'red');
+            log('Restore failed: ' + e.message);
+        }
+    }
+
+    async function deleteSavedSession(id) {
+        if (!confirm('Delete this saved request?')) return;
+        try {
+            await fetch('/api/sessions/' + encodeURIComponent(id), {method: 'DELETE'});
+            if (sessionId === id) {
+                sessionId = null;
+                rememberSession(null);
+            }
+            loadSavedSessions();
+        } catch (e) {
+            console.warn('deleteSavedSession failed:', e);
+        }
+    }
+
+    // Auto-restore on page load
+    (function autoRestore() {
+        const saved = readRememberedSession();
+        // Only try to restore if we are on the Issue tab or no hash
+        const h = (location.hash || '').replace('#', '');
+        if (saved && (h === '' || h === 'issue')) {
+            restoreSession(saved).catch(() => {
+                // If restore failed, clear localStorage
+                rememberSession(null);
+            });
+        }
+        loadSavedSessions();
+    })();
 
     async function createRequest() {
         const domains = document.getElementById('domains').value;
@@ -428,6 +575,7 @@
             if (data.error) throw new Error(data.error);
 
             sessionId = data.session_id;
+            rememberSession(sessionId);
             const tbody = document.querySelector('#tokensTable tbody');
             tbody.innerHTML = '';
             data.tokens.forEach(t => {
@@ -438,6 +586,7 @@
             document.getElementById('step3').style.display = 'block';
             setStatus('dnsStatus', 'Records received. Add them to DNS.', 'orange');
             log('Tokens received. Add the TXT records and click "Check DNS".');
+            loadSavedSessions();
         } catch (e) {
             setStatus('dnsStatus', 'Error: ' + e.message, 'red');
             log('Error: ' + e.message);
@@ -495,6 +644,9 @@
 
             setStatus('issueStatus', 'Done! Copy the three parts into your panel.', 'green');
             log('Certificate issued.');
+            rememberSession(null);
+            sessionId = null;
+            loadSavedSessions();
         } catch (e) {
             setStatus('issueStatus', 'Error: ' + e.message, 'red');
             log('Issue error: ' + e.message);

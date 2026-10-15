@@ -1,6 +1,8 @@
 import os
 import logging
 import dns.resolver
+import session_store
+from datetime import datetime, timezone
 from dotenv import load_dotenv
 from simple_acme_dns import ACMEClient
 
@@ -51,7 +53,8 @@ def _split_pem_chain(pem_bytes):
 
 class ACMEManager:
     def __init__(self):
-        self.sessions = {}
+        self.sessions = session_store.load_all()
+        logger.info("[init] loaded %d persisted session(s)", len(self.sessions))
 
     def create_request(self, session_id, domains):
         logger.info("[create] session=%s domains=%s", session_id, domains)
@@ -87,11 +90,15 @@ class ACMEManager:
         tokens = client.request_verification_tokens()
         logger.info("[create] got tokens: %s", tokens)
 
-        self.sessions[session_id] = {
+        session = {
             "client": client,
             "tokens": tokens,
             "domains": domains,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "status": "pending",
         }
+        self.sessions[session_id] = session
+        session_store.save_session(session_id, session)
         return tokens
 
     def check_dns(self, session_id):
@@ -150,7 +157,14 @@ class ACMEManager:
             logger.warning("[issue] session %s not found", session_id)
             raise ValueError("Session not found")
 
-        client = session["client"]
+        client = session.get("client")
+        if client is None:
+            msg = ("Session client is not available. The server was restarted "
+                   "and the session state could not be fully restored. Please "
+                   "start a new request.")
+            logger.error("[issue] %s (session=%s)", msg, session_id)
+            raise ValueError(msg)
+
         logger.info("[issue] requesting certificate from Let's Encrypt")
         fullchain = client.request_certificate()
 
@@ -183,6 +197,9 @@ class ACMEManager:
         with open(key_path, "w") as f:
             f.write(key_pem)
         logger.info("[issue] private key written to %s", key_path)
+
+        session_store.mark_issued(session_id)
+        self.sessions.pop(session_id, None)
 
         return {
             "certificate": leaf_pem,
