@@ -2,94 +2,28 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>SSL Tools</title>
-    <style>
-        * { box-sizing: border-box; }
-        body { font-family: sans-serif; max-width: 900px; margin: 0 auto; padding: 0 20px 40px; color: #222; }
-        header { border-bottom: 2px solid #eee; margin-bottom: 20px; }
-        header h1 { margin: 20px 0 10px; font-size: 20px; }
-        nav { display: flex; gap: 4px; flex-wrap: wrap; }
-        nav a {
-            padding: 10px 18px; text-decoration: none; color: #555;
-            border: 1px solid transparent; border-bottom: none;
-            border-radius: 6px 6px 0 0; margin-bottom: -2px; cursor: pointer;
-        }
-        nav a:hover { color: #000; }
-        nav a.active { color: #000; background: #fff; border-color: #eee; border-bottom: 2px solid #fff; font-weight: bold; }
-        .tab-content { display: none; }
-        .tab-content.active { display: block; }
-
-        .step { border: 1px solid #ccc; border-radius: 8px; padding: 16px; margin-bottom: 20px; }
-        .step h2 { margin-top: 0; font-size: 16px; color: #333; }
-        input[type="text"], input[type="password"], textarea {
-            width: 100%; padding: 8px; margin: 4px 0;
-            font-family: monospace; font-size: 12px;
-        }
-        input[type="file"] { margin: 4px 0; font-size: 13px; }
-        textarea { resize: vertical; }
-        button { padding: 8px 20px; cursor: pointer; }
-        button:disabled { opacity: 0.5; cursor: not-allowed; }
-        button.small { padding: 2px 10px; font-size: 12px; }
-        table { width: 100%; border-collapse: collapse; margin: 10px 0; }
-        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; font-size: 13px; word-break: break-all; vertical-align: top; }
-        th { background: #f5f5f5; }
-        .status { margin-top: 10px; font-weight: bold; }
-        .status.green { color: green; }
-        .status.red { color: red; }
-        .status.orange { color: orange; }
-        #log, #convLog { background: #fafafa; border: 1px solid #eee; padding: 10px; font-family: monospace; font-size: 12px; max-height: 200px; overflow-y: auto; }
-
-        /* Chain visualization */
-        .chain-viz {
-            display: flex; align-items: center; justify-content: center;
-            gap: 6px; margin: 24px 0; flex-wrap: wrap;
-        }
-        .chain-node {
-            padding: 12px 18px; border-radius: 8px; border: 2px solid #ccc;
-            text-align: center; min-width: 130px; font-size: 12px; background: #fff;
-        }
-        .chain-node.ok { border-color: #2e7d32; background: #e8f5e9; }
-        .chain-node.bad { border-color: #c62828; background: #ffebee; }
-        .chain-node.root { border-style: dashed; }
-        .chain-node.unknown { border-style: dotted; opacity: 0.45; }
-        .chain-node-label { font-weight: bold; font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; color: #666; }
-        .chain-node-name { margin-top: 3px; word-break: break-all; }
-        .chain-arrow { font-size: 22px; color: #bbb; user-select: none; }
-        .chain-arrow.ok { color: #2e7d32; }
-        .chain-arrow.bad { color: #c62828; }
-        .chain-arrow.none { color: #ddd; }
-
-        .verify-details table td:first-child { width: 200px; color: #666; }
-        .verify-details ul { margin: 6px 0 16px; padding-left: 20px; }
-        .verify-details h3 { margin: 20px 0 8px; font-size: 14px; color: #333; border-bottom: 1px solid #eee; padding-bottom: 4px; }
-        .tag-ok { color: #2e7d32; font-weight: bold; }
-        .tag-bad { color: #c62828; font-weight: bold; }
-        .tag-warn { color: #f57c00; font-weight: bold; }
-        .err-list { list-style: none; padding: 0; margin: 8px 0; }
-        .err-list li { padding: 8px 12px; margin: 4px 0; border-radius: 4px; font-size: 13px; }
-        .err-list li.err { background: #ffebee; color: #c62828; border-left: 3px solid #c62828; }
-        .err-list li.warn { background: #fff8e1; color: #e65100; border-left: 3px solid #f57c00; }
-
-        /* Convert: format grid */
-        .format-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-            gap: 6px;
-        }
-        .format-grid label {
-            padding: 10px 12px; border: 1px solid #ddd; border-radius: 6px;
-            cursor: pointer; font-size: 13px; display: flex; align-items: flex-start; gap: 8px;
-        }
-        .format-grid label:hover { background: #f5f5f5; border-color: #bbb; }
-        .format-grid label input { margin-top: 2px; }
-        .format-grid .fmt-desc { display: block; color: #888; font-size: 11px; margin-top: 3px; }
-        .format-grid label.selected { background: #e3f2fd; border-color: #1976d2; }
-    </style>
+    <script>
+        (function () {
+            var pref = 'auto';
+            try { pref = localStorage.getItem('ssl_tools_theme') || 'auto'; } catch (e) {}
+            var resolved = pref === 'auto'
+                ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+                : pref;
+            document.documentElement.setAttribute('data-theme', resolved);
+        })();
+    </script>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <script src="{{ url_for('static', filename='script.js') }}" defer></script>
 </head>
 <body>
 
 <header>
-    <h1>SSL Tools</h1>
+    <div class="header-top">
+        <h1>SSL Tools</h1>
+        <button id="themeToggle" class="theme-toggle" onclick="cycleTheme()" aria-label="Theme" title="Theme">🌓</button>
+    </div>
     <nav>
         <a href="#issue" class="tab active" data-tab="issue">Issue certificate</a>
         <a href="#verify" class="tab" data-tab="verify">Verify certificate</a>
@@ -103,10 +37,9 @@
 
     <div class="step" id="stepResume" style="display:none;">
         <h2>Saved requests</h2>
-        <p style="font-size:13px; color:#666; margin-top:0;">
+        <p class="step-desc">
             Pick a saved request to continue DNS verification or issuance.
-            Sessions are stored on the server, so a page reload or restart
-            will not lose them.
+            Sessions are stored on the server, so a page reload or restart will not lose them.
         </p>
         <div id="sessionsList"></div>
     </div>
@@ -168,7 +101,7 @@
 <section id="tab-verify" class="tab-content">
     <div class="step">
         <h2>Certificate verification</h2>
-        <p style="font-size:13px; color:#666; margin-top:0;">
+        <p class="step-desc">
             Paste the certificate (leaf), its intermediate chain, and the private key.
             Chain and key are optional - but without them full verification is not possible.
         </p>
@@ -178,40 +111,40 @@
 
         <label><b>Intermediate chain</b> (optional)</label>
 
-        <div id="gsInjectBar" style="margin: 6px 0 8px; padding: 10px; background: #f7f9fc; border: 1px solid #e0e6ef; border-radius: 6px;">
-            <div style="font-size: 12px; color: #555; margin-bottom: 6px;">
+        <div id="gsInjectBar" class="inject-bar">
+            <div class="hint-block">
                 <b>Inject GlobalSign intermediate</b>
-                <span style="color:#888;">- pick the right CA for your certificate</span>
+                <span style="color: var(--muted-2);">- pick the right CA for your certificate</span>
             </div>
-            <div style="display: flex; gap: 6px; flex-wrap: wrap; align-items: center;">
-                <select id="gsSelect" style="flex: 1; min-width: 240px; padding: 6px; font-size: 13px;">
+            <div class="gs-row">
+                <select id="gsSelect">
                     <option value="">Loading list...</option>
                 </select>
                 <button type="button" class="small" onclick="injectGsIntermediate()">Insert</button>
                 <button type="button" class="small" onclick="clearGsIntermediate()">Clear</button>
             </div>
-            <div id="gsHint" style="font-size: 12px; color: #666; margin-top: 6px; min-height: 14px;"></div>
-         </div>
+            <div id="gsHint" class="hint" style="min-height: 14px;"></div>
+        </div>
 
-         <textarea id="vChain" rows="6" placeholder="-----BEGIN CERTIFICATE----- ..."></textarea>
+        <textarea id="vChain" rows="6" placeholder="-----BEGIN CERTIFICATE----- ..."></textarea>
 
-         <label><b>Private key</b> (optional)</label>
-         <textarea id="vKey" rows="6" placeholder="-----BEGIN ... PRIVATE KEY----- ..."></textarea>
+        <label><b>Private key</b> (optional)</label>
+        <textarea id="vKey" rows="6" placeholder="-----BEGIN ... PRIVATE KEY----- ..."></textarea>
 
-         <br>
-         <button id="btnVerify" onclick="runVerify()">Verify</button>
-         <button type="button" onclick="clearVerify()">Clear</button>
-         <div class="status" id="verifyStatus"></div>
-     </div>
+        <br>
+        <button id="btnVerify" onclick="runVerify()">Verify</button>
+        <button type="button" onclick="clearVerify()">Clear</button>
+        <div class="status" id="verifyStatus"></div>
+    </div>
 
-     <div id="verifyResult" style="display:none;"></div>
+    <div id="verifyResult" style="display:none;"></div>
 </section>
 
 <!-- ===================== LIVE ===================== -->
 <section id="tab-live" class="tab-content">
     <div class="step">
         <h2>Check certificate installed on a live host</h2>
-        <p style="font-size:13px; color:#666; margin-top:0;">
+        <p class="step-desc">
             Enter a hostname (optionally with a port). The server will be contacted on port 443
             (or the port you provide), and the certificate chain it presents will be analysed.
         </p>
@@ -230,17 +163,16 @@
 <!-- ===================== CONVERT ===================== -->
 <section id="tab-convert" class="tab-content">
 
-    <!-- Step 1: input -->
     <div class="step">
         <h2>1. Input</h2>
-        <p style="font-size:13px; color:#666; margin-top:0;">
+        <p class="step-desc">
             Upload a file or paste its content. Supported: PEM, DER, PFX/P12,
             PKCS#7/P7B, base64-encoded text. The format is detected automatically.
         </p>
 
         <label><b>File</b></label>
         <input type="file" id="convFile" accept="*/*">
-        <div id="convFileName" style="font-size:12px; color:#666; margin-top:4px;"></div>
+        <div id="convFileName" class="file-name"></div>
 
         <label style="display:block; margin-top:12px;"><b>Or paste content</b></label>
         <textarea id="convText" rows="6" placeholder="-----BEGIN CERTIFICATE----- ..."></textarea>
@@ -254,13 +186,11 @@
         <div class="status" id="inspectStatus"></div>
     </div>
 
-    <!-- Step 2: detected -->
     <div class="step" id="step-detected" style="display:none;">
         <h2>2. Detected</h2>
         <div id="detectedContent"></div>
     </div>
 
-    <!-- Step 3: output -->
     <div class="step" id="step-output" style="display:none;">
         <h2>3. Output format</h2>
         <div class="format-grid" id="formatGrid">
@@ -301,7 +231,7 @@
                 <span>Private key - PKCS#1<span class="fmt-desc">RSA traditional format</span></span></label>
         </div>
 
-        <div id="outPassWrap" style="display:none; margin-top:16px; padding:12px; background:#fff8e1; border-radius:6px;">
+        <div id="outPassWrap" class="password-box" style="display:none;">
             <label><b>Output password</b></label>
             <input type="password" id="outConvPass" autocomplete="new-password">
             <label style="display:block; margin-top:8px;"><b>Confirm password</b></label>
@@ -313,7 +243,6 @@
         <div class="status" id="convertStatus"></div>
     </div>
 
-    <!-- Step 4: result -->
     <div class="step" id="step-result" style="display:none;">
         <h2>4. Result</h2>
         <div id="convertFiles"></div>
@@ -325,858 +254,5 @@
     </div>
 </section>
 
-<script>
-    // ---------- Tabs ----------
-    function activateTab(name) {
-        document.querySelectorAll('.tab').forEach(t => {
-            t.classList.toggle('active', t.dataset.tab === name);
-        });
-        document.querySelectorAll('.tab-content').forEach(c => {
-            c.classList.toggle('active', c.id === 'tab-' + name);
-        });
-    }
-
-    document.querySelectorAll('.tab').forEach(t => {
-        t.addEventListener('click', e => {
-            e.preventDefault();
-            const name = t.dataset.tab;
-            history.replaceState(null, '', '#' + name);
-            activateTab(name);
-        });
-    });
-
-    (function initTab() {
-        const h = (location.hash || '').replace('#', '');
-        activateTab(['verify', 'live', 'convert'].includes(h) ? h : 'issue');
-    })();
-
-    // ---------- Helpers ----------
-    function log(msg) {
-        const el = document.getElementById('log');
-        el.innerHTML += msg + '<br>';
-        el.scrollTop = el.scrollHeight;
-    }
-
-    function convLog(msg) {
-        const el = document.getElementById('convLog');
-        if (!el) return;
-        el.innerHTML += msg + '<br>';
-        el.scrollTop = el.scrollHeight;
-    }
-
-    function setStatus(id, text, cls) {
-        const el = document.getElementById(id);
-        el.textContent = text;
-        el.className = 'status ' + (cls || '');
-    }
-
-    function copyField(id) {
-        const el = document.getElementById(id);
-        el.select();
-        document.execCommand('copy');
-        window.getSelection().removeAllRanges();
-    }
-
-    function escapeHtml(s) {
-        if (s == null) return '';
-        return String(s).replace(/[&<>"']/g, c => ({
-            '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
-        }[c]));
-    }
-
-    function fmtDate(iso) {
-        try { return new Date(iso).toLocaleString(); }
-        catch { return iso; }
-    }
-
-    function downloadBlob(blob, filename) {
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = filename;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        setTimeout(() => URL.revokeObjectURL(url), 2000);
-    }
-
-    function b64ToBlob(b64, mime) {
-        const bin = atob(b64);
-        const bytes = new Uint8Array(bin.length);
-        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-        return new Blob([bytes], {type: mime});
-    }
-
-    function fileToBase64(file) {
-        return new Promise((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onload = () => {
-                const idx = reader.result.indexOf(',');
-                resolve(reader.result.slice(idx + 1));
-            };
-            reader.onerror = reject;
-            reader.readAsDataURL(file);
-        });
-    }
-
-    // ---------- Issue ----------
-    let sessionId = null;
-    const LS_KEY = 'ssl_tools_session_id';
-
-    function rememberSession(id) {
-        try {
-            if (id) localStorage.setItem(LS_KEY, id);
-            else localStorage.removeItem(LS_KEY);
-        } catch (e) { /* localStorage disabled */ }
-    }
-
-    function readRememberedSession() {
-        try { return localStorage.getItem(LS_KEY); }
-        catch (e) { return null; }
-    }
-
-    async function loadSavedSessions() {
-        const wrap = document.getElementById('sessionsList');
-        const step = document.getElementById('stepResume');
-        try {
-            const res = await fetch('/api/sessions');
-            const data = await res.json();
-            if (!data.success || !data.sessions || data.sessions.length === 0) {
-                step.style.display = 'none';
-                return;
-            }
-
-            step.style.display = 'block';
-            let html = '<table><thead><tr>' +
-                '<th>Created</th><th>Domains</th><th>Status</th><th>Resumable</th><th></th>' +
-                '</tr></thead><tbody>';
-
-            data.sessions.forEach(s => {
-                const created = s.created_at ? fmtDate(s.created_at) : '?';
-                const dom = (s.domains || []).join(', ');
-                const status = s.status || 'pending';
-                const resumable = s.has_client
-                    ? '<span class="tag-ok">yes</span>'
-                    : '<span class="tag-warn">metadata only</span>';
-                const sid = escapeHtml(s.session_id);
-                html += `<tr>
-                    <td>${escapeHtml(created)}</td>
-                    <td>${escapeHtml(dom)}</td>
-                    <td>${escapeHtml(status)}</td>
-                    <td>${resumable}</td>
-                    <td style="white-space:nowrap;">
-                        <button type="button" class="small" onclick="restoreSession('${sid}')">Resume</button>
-                        <button type="button" class="small" onclick="deleteSavedSession('${sid}')">Delete</button>
-                    </td>
-                </tr>`;
-            });
-            html += '</tbody></table>';
-            wrap.innerHTML = html;
-        } catch (e) {
-            step.style.display = 'none';
-            console.warn('loadSavedSessions failed:', e);
-        }
-    }
-
-    async function restoreSession(id) {
-        setStatus('dnsStatus', 'Restoring session...', 'orange');
-        try {
-            const res = await fetch('/api/sessions/' + encodeURIComponent(id));
-            const data = await res.json();
-            if (!data.success) throw new Error(data.error || 'Session not found');
-
-            sessionId = data.session_id;
-            rememberSession(sessionId);
-
-            // Repopulate domains field
-            if (data.domains && data.domains.length) {
-                document.getElementById('domains').value = data.domains.join(', ');
-            }
-
-            // Repopulate token table
-            const tbody = document.querySelector('#tokensTable tbody');
-            tbody.innerHTML = '';
-            const tokens = data.tokens || {};
-            let n = 0;
-            Object.keys(tokens).forEach(fqdn => {
-                (tokens[fqdn] || []).forEach(val => {
-                    tbody.innerHTML += `<tr><td>${escapeHtml(fqdn)}</td><td>${escapeHtml(val)}</td></tr>`;
-                    n += 1;
-                });
-            });
-
-            document.getElementById('step2').style.display = 'block';
-            document.getElementById('step3').style.display = 'block';
-
-            const issueBtn = document.getElementById('btnIssue');
-            if (data.has_client) {
-                issueBtn.disabled = true;   // require fresh DNS check first
-                setStatus('dnsStatus',
-                    'Session restored (' + n + ' TXT record(s)). Click "Check DNS" to continue.',
-                    'green');
-            } else {
-                issueBtn.disabled = true;
-                setStatus('dnsStatus',
-                    'Session restored, but the ACME client could not be recovered. ' +
-                    'Please create a new request.',
-                    'orange');
-            }
-
-            log('Restored session ' + sessionId + ' with ' + n + ' token(s).');
-            // Refresh the saved list (has_client might change)
-            loadSavedSessions();
-        } catch (e) {
-            setStatus('dnsStatus', 'Restore failed: ' + e.message, 'red');
-            log('Restore failed: ' + e.message);
-        }
-    }
-
-    async function deleteSavedSession(id) {
-        if (!confirm('Delete this saved request?')) return;
-        try {
-            await fetch('/api/sessions/' + encodeURIComponent(id), {method: 'DELETE'});
-            if (sessionId === id) {
-                sessionId = null;
-                rememberSession(null);
-            }
-            loadSavedSessions();
-        } catch (e) {
-            console.warn('deleteSavedSession failed:', e);
-        }
-    }
-
-    // Auto-restore on page load
-    (function autoRestore() {
-        const saved = readRememberedSession();
-        // Only try to restore if we are on the Issue tab or no hash
-        const h = (location.hash || '').replace('#', '');
-        if (saved && (h === '' || h === 'issue')) {
-            restoreSession(saved).catch(() => {
-                // If restore failed, clear localStorage
-                rememberSession(null);
-            });
-        }
-        loadSavedSessions();
-    })();
-
-    async function createRequest() {
-        const domains = document.getElementById('domains').value;
-        const btn = document.getElementById('btnCreate');
-        btn.disabled = true;
-        setStatus('dnsStatus', 'Creating request...', 'orange');
-
-        try {
-            const res = await fetch('/api/create', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({domains})
-            });
-            const data = await res.json();
-            if (data.error) throw new Error(data.error);
-
-            sessionId = data.session_id;
-            rememberSession(sessionId);
-            const tbody = document.querySelector('#tokensTable tbody');
-            tbody.innerHTML = '';
-            data.tokens.forEach(t => {
-                tbody.innerHTML += `<tr><td>${escapeHtml(t.fqdn)}</td><td>${escapeHtml(t.value)}</td></tr>`;
-            });
-
-            document.getElementById('step2').style.display = 'block';
-            document.getElementById('step3').style.display = 'block';
-            setStatus('dnsStatus', 'Records received. Add them to DNS.', 'orange');
-            log('Tokens received. Add the TXT records and click "Check DNS".');
-            loadSavedSessions();
-        } catch (e) {
-            setStatus('dnsStatus', 'Error: ' + e.message, 'red');
-            log('Error: ' + e.message);
-        } finally {
-            btn.disabled = false;
-        }
-    }
-
-    async function checkDNS() {
-        const btn = document.getElementById('btnCheck');
-        btn.disabled = true;
-        setStatus('dnsStatus', 'Checking DNS...', 'orange');
-        log('DNS check started...');
-
-        try {
-            const res = await fetch('/api/check', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({session_id: sessionId})
-            });
-            const data = await res.json();
-            if (data.success) {
-                setStatus('dnsStatus', 'All records found! You can now issue the certificate.', 'green');
-                document.getElementById('btnIssue').disabled = false;
-                log('DNS records successfully propagated.');
-            } else {
-                setStatus('dnsStatus', data.message, 'red');
-                log('Check failed: ' + data.message);
-                btn.disabled = false;
-            }
-        } catch (e) {
-            setStatus('dnsStatus', 'Error: ' + e.message, 'red');
-            btn.disabled = false;
-        }
-    }
-
-    async function issueCert() {
-        const btn = document.getElementById('btnIssue');
-        btn.disabled = true;
-        setStatus('issueStatus', 'Requesting certificate...', 'orange');
-
-        try {
-            const res = await fetch('/api/issue', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({session_id: sessionId})
-            });
-            const data = await res.json();
-            if (!data.success) throw new Error(data.error || 'Unknown error');
-
-            document.getElementById('outCert').value = data.certificate;
-            document.getElementById('outChain').value = data.chain;
-            document.getElementById('outKey').value = data.private_key;
-            document.getElementById('result').style.display = 'block';
-
-            setStatus('issueStatus', 'Done! Copy the three parts into your panel.', 'green');
-            log('Certificate issued.');
-            rememberSession(null);
-            sessionId = null;
-            loadSavedSessions();
-        } catch (e) {
-            setStatus('issueStatus', 'Error: ' + e.message, 'red');
-            log('Issue error: ' + e.message);
-        } finally {
-            btn.disabled = false;
-        }
-    }
-
-    // ---------- Verify ----------
-    function clearVerify() {
-        document.getElementById('vCert').value = '';
-        document.getElementById('vChain').value = '';
-        document.getElementById('vKey').value = '';
-        document.getElementById('verifyResult').style.display = 'none';
-        setStatus('verifyStatus', '', '');
-    }
-
-    async function runVerify() {
-        const cert = document.getElementById('vCert').value;
-        const chain = document.getElementById('vChain').value;
-        const key = document.getElementById('vKey').value;
-        const btn = document.getElementById('btnVerify');
-        btn.disabled = true;
-        setStatus('verifyStatus', 'Verifying...', 'orange');
-
-        try {
-            const res = await fetch('/api/verify', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({certificate: cert, chain: chain, private_key: key})
-            });
-            const data = await res.json();
-            renderVerifyResult(data);
-
-            if (data.success) {
-                setStatus('verifyStatus', 'OK', 'green');
-            } else {
-                setStatus('verifyStatus', 'Issues detected', 'red');
-            }
-        } catch (e) {
-            setStatus('verifyStatus', 'Error: ' + e.message, 'red');
-        } finally {
-            btn.disabled = false;
-        }
-    }
-
-    async function runLiveCheck() {
-        const host = document.getElementById('liveHost').value.trim();
-        const btn = document.getElementById('btnLive');
-        if (!host) {
-            setStatus('liveStatus', 'Enter a hostname', 'red');
-            return;
-        }
-        btn.disabled = true;
-        setStatus('liveStatus', 'Connecting...', 'orange');
-
-        try {
-            const res = await fetch('/api/check_live', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({hostname: host})
-            });
-            const data = await res.json();
-            renderVerifyResult(data, 'liveResult');
-
-            if (data.success) {
-                setStatus('liveStatus', 'OK', 'green');
-            } else {
-                setStatus('liveStatus', 'Issues detected', 'red');
-            }
-        } catch (e) {
-            setStatus('liveStatus', 'Error: ' + e.message, 'red');
-        } finally {
-            btn.disabled = false;
-        }
-    }
-
-    function renderVerifyResult(data, targetId) {
-        const el = document.getElementById(targetId || 'verifyResult');
-        const c = data.certificate;
-        const chain = data.chain || {};
-
-        let html = '';
-
-        // Chain visualization
-        html += '<div class="step"><h2>Chain</h2>';
-        html += '<div class="chain-viz">';
-
-        if (c) {
-            const leafOk = !c.expired && !c.not_yet_valid;
-            html += chainNode('Leaf', c.subject_cn, leafOk ? 'ok' : 'bad');
-        }
-
-        const links = chain.links || [];
-
-        if (links.length > 0) {
-            links.forEach((link, i) => {
-                html += `<div class="chain-arrow ${link.verified ? 'ok' : 'bad'}">→</div>`;
-                const isLast = i === links.length - 1;
-                const node = (chain.nodes || [])[i + 1];
-                const label = node ? node.label : (isLast ? 'Root' : 'Intermediate');
-                const name  = node ? node.name : link.to;
-                const ok    = link.verified;
-                const cls   = (label === 'Root' ? 'root ' : '') + (ok ? 'ok' : 'bad');
-                html += chainNode(label, name, cls);
-            });
-        } else {
-            html += '<div class="chain-arrow none">-&gt;</div>';
-            html += chainNode('Intermediate', 'not provided', 'unknown', true);
-        }
-
-        html += '</div></div>';
-
-        // Errors / warnings
-        if ((data.errors && data.errors.length) || (data.warnings && data.warnings.length)) {
-            html += '<div class="step"><h2>Issues</h2><ul class="err-list">';
-            (data.errors || []).forEach(e => {
-                html += `<li class="err">${escapeHtml(e)}</li>`;
-            });
-            (data.warnings || []).forEach(w => {
-                html += `<li class="warn">${escapeHtml(w)}</li>`;
-            });
-            html += '</ul></div>';
-        }
-
-        // Connection
-        if (data.connection) {
-            const cc = data.connection;
-            html += '<div class="step verify-details"><h2>Connection</h2><table>';
-            html += row('Host', cc.hostname + ':' + cc.port);
-            html += row('TLS version', cc.tls_version || '—');
-            if (cc.cipher) {
-                html += row('Cipher', `${cc.cipher.name} (${cc.cipher.bits} bits, ${cc.cipher.protocol})`);
-            }
-            html += rowHtml('Trusted by system CA',
-                cc.verify_ok
-                    ? '<span class="tag-ok">yes</span>'
-                    : '<span class="tag-bad">no</span>');
-            if (!cc.verify_ok && cc.verify_error) {
-                html += rowHtml('Verification error',
-                    `<span class="tag-bad">${escapeHtml(cc.verify_error)}</span>`);
-            }
-            html += '</table></div>';
-        }
-
-        // Details
-        html += '<div class="step verify-details"><h2>Details</h2>';
-
-        if (c) {
-            html += '<h3>Certificate</h3><table>';
-            html += row('Subject', c.subject);
-            html += row('Issuer', c.issuer);
-            html += row('Valid from', fmtDate(c.not_before));
-            html += row('Valid until', fmtDate(c.not_after));
-            const daysCls = c.expired ? 'tag-bad' : (c.days_left < 14 ? 'tag-warn' : 'tag-ok');
-            html += rowHtml('Days left',
-                `<span class="${daysCls}">${c.days_left}</span>`);
-            html += row('Serial', c.serial);
-            html += row('Signature algorithm', c.signature_algorithm);
-            html += row('Is CA', c.is_ca ? 'yes' : 'no');
-            html += '</table>';
-
-            html += '<h3>Domains covered</h3><ul>';
-            if (c.domains && c.domains.length) {
-                c.domains.forEach(d => html += `<li>${escapeHtml(d)}</li>`);
-            } else {
-                html += '<li style="color:#999">none</li>';
-            }
-            html += '</ul>';
-        }
-
-        if (data.key) {
-            html += '<h3>Private key</h3><table>';
-            if (data.key.type) html += row('Type', data.key.type);
-            if ('matches_certificate' in data.key) {
-                html += rowHtml('Matches certificate',
-                    data.key.matches_certificate
-                        ? '<span class="tag-ok">yes</span>'
-                        : '<span class="tag-bad">no</span>');
-            }
-            if (data.key.error) {
-                html += rowHtml('Error', `<span class="tag-bad">${escapeHtml(data.key.error)}</span>`);
-            }
-            html += '</table>';
-        }
-
-        if (chain && chain.length !== undefined) {
-            html += '<h3>Chain</h3><table>';
-            html += row('Certificates in chain', chain.length);
-            html += rowHtml('Valid',
-                chain.valid
-                    ? '<span class="tag-ok">yes</span>'
-                    : '<span class="tag-bad">no</span>');
-            html += rowHtml('Ends with self-signed root',
-                chain.complete
-                    ? '<span class="tag-ok">yes</span>'
-                    : '<span class="tag-warn">no (cross-signed - normal for LE)</span>');
-            html += '</table>';
-
-            if (chain.certificates && chain.certificates.length) {
-                html += '<h3>Chain contents</h3><table>';
-                html += '<thead><tr><th>#</th><th>Subject</th><th>Issuer</th></tr></thead><tbody>';
-                chain.certificates.forEach((cc, i) => {
-                    html += `<tr>
-                        <td>${i + 1}</td>
-                        <td>${escapeHtml(cc.subject)}</td>
-                        <td>${escapeHtml(cc.issuer)}</td>
-                    </tr>`;
-                });
-                html += '</tbody></table>';
-            }
-        }
-
-        html += '</div>';
-
-        el.innerHTML = html;
-        el.style.display = 'block';
-    }
-
-    function row(label, value) {
-        return rowHtml(label, escapeHtml(value));
-    }
-
-    function rowHtml(label, htmlValue) {
-        return `<tr><td>${escapeHtml(label)}</td><td>${htmlValue}</td></tr>`;
-    }
-
-    function chainNode(label, name, cls, unknown) {
-        const classes = 'chain-node ' + (cls || '') + (unknown ? ' unknown' : '');
-        const nameHtml = name ? `<div class="chain-node-name">${escapeHtml(name)}</div>` : '';
-        return `<div class="${classes}">
-            <div class="chain-node-label">${escapeHtml(label)}</div>
-            ${nameHtml}
-        </div>`;
-    }
-
-    // ---------- Convert ----------
-    let convFileB64 = null;
-
-    document.getElementById('convFile').addEventListener('change', e => {
-        const f = e.target.files[0];
-        if (!f) {
-            convFileB64 = null;
-            document.getElementById('convFileName').textContent = '';
-            return;
-        }
-        convFileB64 = null;
-        fileToBase64(f).then(b64 => { convFileB64 = b64; });
-        document.getElementById('convFileName').textContent = `${f.name} (${f.size} bytes)`;
-        document.getElementById('convText').value = '';
-    });
-
-    document.getElementById('convText').addEventListener('input', e => {
-        if (e.target.value.trim()) {
-            document.getElementById('convFile').value = '';
-            document.getElementById('convFileName').textContent = '';
-            convFileB64 = null;
-        }
-    });
-
-    document.querySelectorAll('input[name="outFormat"]').forEach(r => {
-        r.addEventListener('change', () => {
-            const isPfx = r.value === 'pfx';
-            document.getElementById('outPassWrap').style.display = isPfx ? 'block' : 'none';
-            document.querySelectorAll('.format-grid label').forEach(l => {
-                const inp = l.querySelector('input');
-                l.classList.toggle('selected', inp && inp.checked);
-            });
-        });
-    });
-
-    function buildConvertPayload() {
-        const text = document.getElementById('convText').value;
-        const password = document.getElementById('convPass').value;
-        const payload = {password};
-        if (convFileB64) {
-            payload.input_b64 = convFileB64;
-        } else if (text.trim()) {
-            payload.input_text = text;
-        } else {
-            throw new Error('Provide a file or paste content');
-        }
-        return payload;
-    }
-
-    function clearConvert() {
-        document.getElementById('convFile').value = '';
-        document.getElementById('convFileName').textContent = '';
-        document.getElementById('convText').value = '';
-        document.getElementById('convPass').value = '';
-        document.getElementById('outConvPass').value = '';
-        document.getElementById('outConvPassConfirm').value = '';
-        document.getElementById('step-detected').style.display = 'none';
-        document.getElementById('step-output').style.display = 'none';
-        document.getElementById('step-result').style.display = 'none';
-        document.getElementById('outPassWrap').style.display = 'none';
-        setStatus('inspectStatus', '', '');
-        setStatus('convertStatus', '', '');
-        convFileB64 = null;
-    }
-
-    async function runInspect() {
-        let payload;
-        try { payload = buildConvertPayload(); }
-        catch (e) { setStatus('inspectStatus', e.message, 'red'); return; }
-
-        const btn = document.getElementById('btnInspect');
-        btn.disabled = true;
-        setStatus('inspectStatus', 'Inspecting...', 'orange');
-        convLog('Inspecting input...');
-
-        try {
-            const res = await fetch('/api/convert/inspect', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify(payload)
-            });
-            const data = await res.json();
-            if (!data.success) throw new Error(data.error || 'Inspection failed');
-
-            renderInspect(data);
-            setStatus('inspectStatus', 'Detected: ' + data.source_format, 'green');
-            convLog('Source format: ' + data.source_format);
-            document.getElementById('step-detected').style.display = 'block';
-            document.getElementById('step-output').style.display = 'block';
-            document.getElementById('step-result').style.display = 'none';
-        } catch (e) {
-            setStatus('inspectStatus', 'Error: ' + e.message, 'red');
-            convLog('Error: ' + e.message);
-        } finally {
-            btn.disabled = false;
-        }
-    }
-
-    function renderInspect(data) {
-        let html = '<table>';
-        html += `<tr><td>Source format</td><td><b>${escapeHtml(data.source_format)}</b></td></tr>`;
-        html += `<tr><td>Private key</td><td>${data.has_private_key
-            ? '<span class="tag-ok">yes</span> (' + escapeHtml(data.key_type || '') + ')'
-            : '<span class="tag-warn">no</span>'}</td></tr>`;
-        html += `<tr><td>Certificate</td><td>${data.has_certificate
-            ? '<span class="tag-ok">yes</span>'
-            : '<span class="tag-warn">no</span>'}</td></tr>`;
-
-        if (data.certificate) {
-            html += `<tr><td>&nbsp;&nbsp;Subject</td><td>${escapeHtml(data.certificate.subject_cn)}</td></tr>`;
-            html += `<tr><td>&nbsp;&nbsp;Issuer</td><td>${escapeHtml(data.certificate.issuer_cn)}</td></tr>`;
-            html += `<tr><td>&nbsp;&nbsp;Valid until</td><td>${escapeHtml(data.certificate.not_after)}</td></tr>`;
-        }
-
-        html += `<tr><td>Chain</td><td>${data.chain_length} cert(s)</td></tr>`;
-        if (data.chain && data.chain.length) {
-            data.chain.forEach((c, i) => {
-                html += `<tr><td>&nbsp;&nbsp;#${i + 1}</td><td>${escapeHtml(c.subject_cn)} &larr; issued by ${escapeHtml(c.issuer_cn)}</td></tr>`;
-            });
-        }
-
-        html += `<tr><td>CSR</td><td>${data.has_csr ? 'yes' : 'no'}</td></tr>`;
-        html += `<tr><td>Public key</td><td>${data.has_public_key ? 'yes' : 'no'}</td></tr>`;
-        html += '</table>';
-
-        if (data.warnings && data.warnings.length) {
-            html += '<ul class="err-list" style="margin-top:12px;">';
-            data.warnings.forEach(w => {
-                html += `<li class="warn">${escapeHtml(w)}</li>`;
-            });
-            html += '</ul>';
-        }
-
-        document.getElementById('detectedContent').innerHTML = html;
-    }
-
-    async function runConvert() {
-        let payload;
-        try { payload = buildConvertPayload(); }
-        catch (e) { setStatus('convertStatus', e.message, 'red'); return; }
-
-        payload.target = (document.querySelector('input[name="outFormat"]:checked') || {}).value;
-        payload.output_password = document.getElementById('outConvPass').value;
-        payload.output_password_confirm = document.getElementById('outConvPassConfirm').value;
-
-        if (!payload.target) {
-            setStatus('convertStatus', 'Select an output format', 'red');
-            return;
-        }
-
-        const btn = document.getElementById('btnConvert');
-        btn.disabled = true;
-        setStatus('convertStatus', 'Converting...', 'orange');
-        convLog('Target format: ' + payload.target);
-
-        try {
-            const res = await fetch('/api/convert/output', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify(payload)
-            });
-            const data = await res.json();
-            if (!data.success) throw new Error(data.error || 'Conversion failed');
-
-            renderFiles(data.files);
-            setStatus('convertStatus', 'Done - ' + data.files.length + ' file(s)', 'green');
-            convLog('Produced ' + data.files.length + ' file(s)');
-            document.getElementById('step-result').style.display = 'block';
-        } catch (e) {
-            setStatus('convertStatus', 'Error: ' + e.message, 'red');
-            convLog('Error: ' + e.message);
-        } finally {
-            btn.disabled = false;
-        }
-    }
-
-    let convOutputFiles = [];
-
-    function renderFiles(files) {
-        convOutputFiles = files;
-        let html = '';
-        files.forEach((f, i) => {
-            html += '<div style="margin-bottom:16px;">';
-            html += `<label style="display:block;"><b>${escapeHtml(f.name)}</b> <span style="color:#666; font-weight:normal;">(${f.size} bytes)</span> `;
-            html += `<button type="button" class="small" onclick="downloadConvFile(${i})">download</button>`;
-            if (f.text !== null && f.text !== undefined) {
-                html += ` <button type="button" class="small" onclick="copyConvFile(${i})">copy</button>`;
-            }
-            html += '</label>';
-
-            if (f.text !== null && f.text !== undefined && f.text.length < 65536) {
-                html += `<textarea id="convFile_${i}" readonly rows="8">${escapeHtml(f.text)}</textarea>`;
-            } else {
-                html += '<div style="color:#666; font-size:12px; padding:8px; background:#fafafa; border:1px solid #eee;">Binary file - use the download button</div>';
-            }
-            html += '</div>';
-        });
-        document.getElementById('convertFiles').innerHTML = html;
-    }
-
-    function downloadConvFile(idx) {
-        const f = convOutputFiles[idx];
-        if (!f) return;
-        const blob = b64ToBlob(f.b64, 'application/octet-stream');
-        downloadBlob(blob, f.name);
-    }
-
-    function copyConvFile(idx) {
-        const el = document.getElementById('convFile_' + idx);
-        if (!el) return;
-        el.select();
-        document.execCommand('copy');
-        window.getSelection().removeAllRanges();
-    }
-
-// ---------- GlobalSign intermediate injector ----------
-let gsCatalogLoaded = false;
-let gsCatalogById = {};
-
-async function loadGsCatalog() {
-    if (gsCatalogLoaded) return;
-    const sel = document.getElementById('gsSelect');
-    try {
-        const res = await fetch('/api/globalsign-intermediates');
-        const data = await res.json();
-        if (!data.success) throw new Error(data.error || 'Failed to load');
-
-        sel.innerHTML = '<option value="">- select an intermediate -</option>';
-        gsCatalogById = {};
-
-        data.groups.forEach(group => {
-            const og = document.createElement('optgroup');
-            og.label = group.name + ' (' + group.items.length + ')';
-            group.items.forEach(item => {
-                const opt = document.createElement('option');
-                opt.value = item.id;
-                opt.textContent = item.label + ' - ' + item.algorithm + ' - ' + item.year;
-                opt.title = item.description || '';
-                og.appendChild(opt);
-                gsCatalogById[item.id] = item;
-            });
-            sel.appendChild(og);
-        });
-
-        sel.addEventListener('change', () => {
-            const item = gsCatalogById[sel.value];
-            document.getElementById('gsHint').textContent = item ? (item.description || '') : '';
-        });
-
-        gsCatalogLoaded = true;
-    } catch (e) {
-        sel.innerHTML = '<option value="">Failed to load list</option>';
-        document.getElementById('gsHint').textContent = 'Error: ' + e.message;
-    }
-}
-
-function injectGsIntermediate() {
-    const sel = document.getElementById('gsSelect');
-    const id = sel.value;
-    if (!id) {
-        setStatus('verifyStatus', 'Pick an intermediate from the list first', 'orange');
-        return;
-    }
-    const item = gsCatalogById[id];
-    if (!item || !item.pem) {
-        setStatus('verifyStatus', 'Certificate payload missing', 'red');
-        return;
-    }
-
-    const chainEl = document.getElementById('vChain');
-    const hadContent = chainEl.value.trim().length > 0;
-    chainEl.value = item.pem.trim() + '\n';
-
-    setStatus('verifyStatus',
-        (hadContent ? 'Replaced chain with ' : 'Inserted ') + item.label,
-        'green');
-}
-
-function clearGsIntermediate() {
-    document.getElementById('vChain').value = '';
-    document.getElementById('gsSelect').value = '';
-    document.getElementById('gsHint').textContent = '';
-    setStatus('verifyStatus', '', '');
-}
-
-// Load the catalog the first time the Verify tab is opened.
-(function wireGsCatalog() {
-    const verifyTab = document.querySelector('.tab[data-tab="verify"]');
-    if (verifyTab) {
-        verifyTab.addEventListener('click', loadGsCatalog);
-    }
-    const h = (location.hash || '').replace('#', '');
-    if (h === 'verify') loadGsCatalog();
-})();
-</script>
 </body>
 </html>
