@@ -1,6 +1,7 @@
 accounts
 certs
 logs
+sessions
 __pycache__
 
 venv
