@@ -223,6 +223,7 @@ def api_session_delete(session_id):
 def api_build_chain():
     data = request.get_json(silent=True) or {}
     cert_pem = (data.get("certificate") or "").strip()
+    include_root = bool(data.get("include_root", False))
 
     if not cert_pem:
         return jsonify({
@@ -230,12 +231,17 @@ def api_build_chain():
             "errors": ["Certificate is required"],
             "chain": [],
             "warnings": [],
+            "found_root": False,
+            "root_included": False,
+            "excluded_root": None,
+            "complete": False,
         }), 400
 
-    logger.info("[api/build_chain] input=%d bytes", len(cert_pem))
+    logger.info("[api/build_chain] input=%d bytes include_root=%s",
+                len(cert_pem), include_root)
 
     try:
-        result = build_certificate_chain(cert_pem)
+        result = build_certificate_chain(cert_pem, include_root=include_root)
     except Exception as e:
         logger.exception("[api/build_chain] failed: %s", e)
         return jsonify({
@@ -243,11 +249,18 @@ def api_build_chain():
             "errors": [str(e)],
             "chain": [],
             "warnings": [],
+            "found_root": False,
+            "root_included": False,
+            "excluded_root": None,
+            "complete": False,
         }), 500
 
     logger.info(
-        "[api/build_chain] built %d cert(s), errors=%d warnings=%d",
+        "[api/build_chain] built %d cert(s), root_found=%s root_included=%s, "
+        "errors=%d warnings=%d",
         len(result.get("chain", [])),
+        result.get("found_root"),
+        result.get("root_included"),
         len(result.get("errors", [])),
         len(result.get("warnings", [])),
     )
@@ -336,6 +349,7 @@ def api_check_live():
         "verify_ok": fetched["verify_ok"],
         "verify_error": fetched["verify_error"],
     }
+    result["chain_pem"] = fetched.get("chain_pem") or []
     return jsonify(result)
 
 

@@ -134,6 +134,13 @@ def _find_chain_path(leaf, chain_certs, max_depth=15):
     return ordered, links, unused, complete
 
 
+def _is_self_signed(cert):
+    """True iff subject == issuer AND the signature verifies with its own key."""
+    if cert.subject != cert.issuer:
+        return False
+    return _verify_issued_by(cert, cert)
+
+
 def _verify_issued_by(child, issuer):
     if hasattr(child, "verify_directly_issued_by"):
         try:
@@ -194,6 +201,7 @@ def _cert_info(cert):
         "serial": format(cert.serial_number, "x"),
         "signature_algorithm": cert.signature_algorithm_oid._name,
         "is_ca": _is_ca(cert),
+        "self_signed": _is_self_signed(cert),
     }
 
 
@@ -468,10 +476,13 @@ def _load_system_ca_store():
 
 
 def _find_issuer_in_store(child, store):
-    """Find a certificate in the store that issued `child`."""
-    for candidate in store:
-        if candidate.subject != child.issuer:
-            continue
+    candidates = [c for c in store if c.subject == child.issuer]
+    if not candidates:
+        return None
+
+    candidates.sort(key=lambda c: 0 if c.subject == c.issuer else 1)
+
+    for candidate in candidates:
         if _verify_issued_by(child, candidate):
             return candidate
     return None
@@ -481,7 +492,7 @@ def _cert_to_pem(cert):
     return cert.public_bytes(serialization.Encoding.PEM).decode("ascii")
 
 
-def build_certificate_chain(cert_pem):
+def build_certificate_chain(cert_pem, include_root=False):
     errors = []
     warnings = []
 
@@ -493,6 +504,10 @@ def build_certificate_chain(cert_pem):
             "chain": [],
             "errors": [f"Cannot parse certificate: {e}"],
             "warnings": [],
+            "found_root": False,
+            "root_included": False,
+            "excluded_root": None,
+            "complete": False,
         }
 
     store = _load_system_ca_store()
@@ -500,23 +515,18 @@ def build_certificate_chain(cert_pem):
     chain = [{
         "cert": leaf,
         "pem": cert_pem.strip() + "\n",
-        "type": "leaf",
         "source": "input",
     }]
-
     current = leaf
     seen_serials = {leaf.serial_number}
 
     for _ in range(MAX_CHAIN_DEPTH):
-        # Self-signed root?
         if current.subject == current.issuer:
-            chain[-1]["type"] = "root"
             break
 
         issuer = None
         source = None
 
-        # 1) AIA
         aia_url = _aia_ca_issuers_url(current)
         if aia_url:
             try:
@@ -527,7 +537,6 @@ def build_certificate_chain(cert_pem):
                 logger.warning("[chain] AIA fetch failed for %s: %s", aia_url, e)
                 warnings.append(f"AIA download failed for {aia_url}: {e}")
 
-        # 2) Local store
         if issuer is None:
             issuer = _find_issuer_in_store(current, store)
             if issuer is not None:
@@ -538,10 +547,8 @@ def build_certificate_chain(cert_pem):
                 f"Could not find issuer for {_short_name(current.subject)} "
                 f"({_short_name(current.issuer)})"
             )
-            chain[-1]["type"] = "root"  # mark last known as root-ish
             break
 
-        # Avoid loops
         if issuer.serial_number in seen_serials:
             warnings.append(
                 f"Loop detected: {_short_name(issuer.subject)} already in chain"
@@ -552,24 +559,44 @@ def build_certificate_chain(cert_pem):
         chain.append({
             "cert": issuer,
             "pem": _cert_to_pem(issuer),
-            "type": "intermediate",
             "source": source,
         })
         current = issuer
-
     else:
         errors.append(f"Maximum chain depth ({MAX_CHAIN_DEPTH}) reached")
 
-    # Post-process types
+    found_root = bool(chain) and _is_self_signed(chain[-1]["cert"])
+
+    excluded_root = None
+    if found_root and not include_root and len(chain) > 1:
+        dropped = chain.pop()
+        dropped_info = _cert_info(dropped["cert"])
+        excluded_root = {
+            "subject": dropped_info["subject_cn"],
+            "not_after": dropped_info["not_after"],
+        }
+
+    # Assign types on the final list.
     for i, item in enumerate(chain):
-        if item["cert"].subject == item["cert"].issuer:
-            item["type"] = "root"
-        elif i == 0:
+        is_self = _is_self_signed(item["cert"])
+        if i == 0:
             item["type"] = "leaf"
+        elif is_self:
+            item["type"] = "root"
         else:
             item["type"] = "intermediate"
 
-    # Attach info and strip internal `cert` object
+    # Warn if the last item is a "root-looking" intermediate.
+    if chain:
+        last_name = _short_name(chain[-1]["cert"].subject)
+        if (chain[-1]["type"] == "intermediate"
+                and last_name.lower().startswith(("root ", "root-", "root_"))):
+            warnings.append(
+                f"'{last_name}' is an intermediate, not a self-signed root "
+                f"(its issuer is not in the local CA store). It is kept in the "
+                f"chain because it is needed to reach the real root."
+            )
+
     result_chain = []
     for item in chain:
         info = _cert_info(item["cert"])
@@ -578,13 +605,20 @@ def build_certificate_chain(cert_pem):
             "info": info,
             "type": item["type"],
             "source": item["source"],
+            "self_signed": info["self_signed"],
         })
 
+    root_included = found_root and include_root
+
     return {
-        "success": len(result_chain) > 0 and len(errors) == 0,
+        "success": len(result_chain) > 0,
         "chain": result_chain,
         "errors": errors,
         "warnings": warnings,
+        "found_root": found_root,
+        "root_included": root_included,
+        "excluded_root": excluded_root,
+        "complete": found_root,
     }
 
 

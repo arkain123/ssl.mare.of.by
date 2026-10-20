@@ -65,6 +65,7 @@ document.querySelectorAll('.tab').forEach(t => {
 /* ============ Helpers ============ */
 function log(msg) {
     const el = document.getElementById('log');
+    if (!el) return;
     el.innerHTML += msg + '<br>';
     el.scrollTop = el.scrollHeight;
 }
@@ -78,12 +79,14 @@ function convLog(msg) {
 
 function setStatus(id, text, cls) {
     const el = document.getElementById(id);
+    if (!el) return;
     el.textContent = text;
     el.className = 'status ' + (cls || '');
 }
 
 function copyField(id) {
     const el = document.getElementById(id);
+    if (!el) return;
     el.select();
     document.execCommand('copy');
     window.getSelection().removeAllRanges();
@@ -131,6 +134,29 @@ function fileToBase64(file) {
     });
 }
 
+function showNotification(message, type) {
+    const n = document.createElement('div');
+    n.style.cssText = `
+        position: fixed; top: 20px; right: 20px; padding: 12px 18px;
+        background: ${type === 'error' ? 'var(--bad-bg)' : 'var(--ok-bg)'};
+        color: ${type === 'error' ? 'var(--bad)' : 'var(--ok)'};
+        border: 1px solid currentColor; border-radius: 8px; z-index: 10000;
+        font-size: 13px; font-weight: 600; max-width: 360px;
+    `;
+    n.textContent = message;
+    document.body.appendChild(n);
+    setTimeout(() => n.remove(), 3000);
+}
+
+function _setUrlSession(id) {
+    try {
+        const url = new URL(location.href);
+        if (id) url.searchParams.set('session', id);
+        else url.searchParams.delete('session');
+        history.replaceState(null, '', url.toString());
+    } catch (e) {}
+}
+
 /* ============ Issue ============ */
 let sessionId = null;
 const LS_KEY = 'ssl_tools_session_id';
@@ -150,6 +176,7 @@ function readRememberedSession() {
 async function loadSavedSessions() {
     const wrap = document.getElementById('sessionsList');
     const step = document.getElementById('stepResume');
+    if (!wrap || !step) return;
     try {
         const res = await fetch('/api/sessions');
         const data = await res.json();
@@ -159,7 +186,9 @@ async function loadSavedSessions() {
         }
 
         step.style.display = 'block';
-        let html = '<table><thead><tr>' +
+        let html = '<p class="step-desc">Sessions marked “metadata only” cannot be resumed ' +
+            'because the ACME client state was lost. Create a new request instead.</p>';
+        html += '<table><thead><tr>' +
             '<th>Created</th><th>Domains</th><th>Status</th><th>Resumable</th><th></th>' +
             '</tr></thead><tbody>';
 
@@ -178,6 +207,7 @@ async function loadSavedSessions() {
                 <td>${resumable}</td>
                 <td style="white-space:nowrap;">
                     <button type="button" class="small" onclick="restoreSession('${sid}')">Resume</button>
+                    <button type="button" class="small" onclick="shareSession('${sid}')">Share</button>
                     <button type="button" class="small" onclick="deleteSavedSession('${sid}')">Delete</button>
                 </td>
             </tr>`;
@@ -190,30 +220,59 @@ async function loadSavedSessions() {
     }
 }
 
+function shareSession(id) {
+    const url = new URL(location.href);
+    url.searchParams.set('session', id);
+    url.hash = 'issue';
+    const link = url.toString();
+    navigator.clipboard.writeText(link).then(() => {
+        showNotification('Link copied: ' + link, 'success');
+    }).catch(() => {
+        prompt('Copy this link:', link);
+    });
+}
+
 async function restoreSession(id) {
     setStatus('dnsStatus', 'Restoring session...', 'orange');
     try {
         const res = await fetch('/api/sessions/' + encodeURIComponent(id));
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
         if (!data.success) throw new Error(data.error || 'Session not found');
 
         sessionId = data.session_id;
         rememberSession(sessionId);
+        _setUrlSession(sessionId);
 
         if (data.domains && data.domains.length) {
-            document.getElementById('domains').value = data.domains.join(', ');
+            const d = document.getElementById('domains');
+            if (d) d.value = data.domains.join(', ');
         }
 
         const tbody = document.querySelector('#tokensTable tbody');
-        tbody.innerHTML = '';
-        const tokens = data.tokens || {};
-        let n = 0;
-        Object.keys(tokens).forEach(fqdn => {
-            (tokens[fqdn] || []).forEach(val => {
-                tbody.innerHTML += `<tr><td>${escapeHtml(fqdn)}</td><td>${escapeHtml(val)}</td></tr>`;
-                n += 1;
-            });
-        });
+        if (tbody) {
+            tbody.innerHTML = '';
+            const tokens = data.tokens || {};
+            let n = 0;
+            if (Array.isArray(tokens)) {
+                tokens.forEach(t => {
+                    if (!t || !t.fqdn || !t.value) return;
+                    tbody.innerHTML += `<tr><td>${escapeHtml(t.fqdn)}</td><td>${escapeHtml(t.value)}</td></tr>`;
+                    n += 1;
+                });
+            } else if (tokens && typeof tokens === 'object') {
+                Object.keys(tokens).forEach(fqdn => {
+                    const raw = tokens[fqdn];
+                    const vals = Array.isArray(raw) ? raw : (raw ? [raw] : []);
+                    vals.forEach(val => {
+                        if (val == null) return;
+                        tbody.innerHTML += `<tr><td>${escapeHtml(fqdn)}</td><td>${escapeHtml(String(val))}</td></tr>`;
+                        n += 1;
+                    });
+                });
+            }
+            sessionStorage.setItem('tokenCount', String(n));
+        }
 
         document.getElementById('step2').style.display = 'block';
         document.getElementById('step3').style.display = 'block';
@@ -223,22 +282,29 @@ async function restoreSession(id) {
 
         if (data.has_client) {
             if (checkBtn) checkBtn.disabled = false;
-            issueBtn.disabled = true;
+            if (issueBtn) issueBtn.disabled = true;
             setStatus('dnsStatus',
-                `Session restored (${n} TXT record(s)). Click "Check DNS" to continue.`,
+                'Session restored. Click "Check DNS" to continue.',
                 'green');
         } else {
             if (checkBtn) checkBtn.disabled = true;
-            issueBtn.disabled = true;
+            if (issueBtn) issueBtn.disabled = true;
             setStatus('dnsStatus',
                 'Session metadata was restored, but the ACME client could not be ' +
                 'recovered (server restart). Please create a new request.',
                 'red');
         }
 
-        log('Restored session ' + sessionId + ' with ' + n + ' token(s).');
+        log('Restored session ' + sessionId);
+
+        setTimeout(() => {
+            const step2 = document.getElementById('step2');
+            if (step2) step2.scrollIntoView({behavior: 'smooth', block: 'start'});
+        }, 100);
+
         loadSavedSessions();
     } catch (e) {
+        console.error('[restoreSession]', e);
         setStatus('dnsStatus', 'Restore failed: ' + e.message, 'red');
         log('Restore failed: ' + e.message);
     }
@@ -251,6 +317,7 @@ async function deleteSavedSession(id) {
         if (sessionId === id) {
             sessionId = null;
             rememberSession(null);
+            _setUrlSession(null);
         }
         loadSavedSessions();
     } catch (e) {
@@ -259,6 +326,15 @@ async function deleteSavedSession(id) {
 }
 
 (function autoRestore() {
+    const urlSession = new URLSearchParams(location.search).get('session');
+    if (urlSession) {
+        restoreSession(urlSession).catch(() => {
+            rememberSession(null);
+        });
+        loadSavedSessions();
+        return;
+    }
+
     const saved = readRememberedSession();
     const h = (location.hash || '').replace('#', '');
     if (saved && (h === '' || h === 'issue')) {
@@ -286,6 +362,8 @@ async function createRequest() {
 
         sessionId = data.session_id;
         rememberSession(sessionId);
+        _setUrlSession(sessionId);
+
         const tbody = document.querySelector('#tokensTable tbody');
         tbody.innerHTML = '';
         data.tokens.forEach(t => {
@@ -294,8 +372,19 @@ async function createRequest() {
 
         document.getElementById('step2').style.display = 'block';
         document.getElementById('step3').style.display = 'block';
+
+        const checkBtn = document.getElementById('btnCheck');
+        if (checkBtn) checkBtn.disabled = false;
+        document.getElementById('btnIssue').disabled = true;
+
         setStatus('dnsStatus', 'Records received. Add them to DNS.', 'orange');
         log('Tokens received. Add the TXT records and click "Check DNS".');
+
+        setTimeout(() => {
+            const step2 = document.getElementById('step2');
+            if (step2) step2.scrollIntoView({behavior: 'smooth', block: 'start'});
+        }, 100);
+
         loadSavedSessions();
     } catch (e) {
         setStatus('dnsStatus', 'Error: ' + e.message, 'red');
@@ -324,6 +413,7 @@ async function checkDNS() {
                 'All records found! You can now issue the certificate.', 'green');
             document.getElementById('btnIssue').disabled = false;
             log('DNS records successfully propagated.');
+            btn.disabled = false;
         } else {
             setStatus('dnsStatus', data.message || 'Check failed', 'red');
             log('Check failed: ' + (data.message || 'unknown error'));
@@ -332,15 +422,12 @@ async function checkDNS() {
                 btn.disabled = true;
                 return;
             }
+            btn.disabled = false;
         }
     } catch (e) {
         setStatus('dnsStatus', 'Error: ' + e.message, 'red');
         log('Check error: ' + e.message);
-    } finally {
-        if (btn && !/not found|not restored|expired/i.test(
-                document.getElementById('dnsStatus').textContent || '')) {
-            btn.disabled = false;
-        }
+        btn.disabled = false;
     }
 }
 
@@ -366,6 +453,7 @@ async function issueCert() {
         setStatus('issueStatus', 'Done! Copy the three parts into your panel.', 'green');
         log('Certificate issued.');
         rememberSession(null);
+        _setUrlSession(null);
         sessionId = null;
         loadSavedSessions();
     } catch (e) {
@@ -382,6 +470,8 @@ function clearVerify() {
     document.getElementById('vChain').value = '';
     document.getElementById('vKey').value = '';
     document.getElementById('verifyResult').style.display = 'none';
+    const chainResult = document.getElementById('chainResult');
+    if (chainResult) chainResult.style.display = 'none';
     setStatus('verifyStatus', '', '');
 }
 
@@ -392,6 +482,9 @@ async function buildChain() {
         return;
     }
 
+    const includeRootEl = document.getElementById('includeRoot');
+    const includeRoot = !!(includeRootEl && includeRootEl.checked);
+
     const btn = document.getElementById('btnBuildChain');
     btn.disabled = true;
     setStatus('verifyStatus', 'Building chain...', 'orange');
@@ -400,15 +493,20 @@ async function buildChain() {
         const res = await fetch('/api/build_chain', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({certificate: cert})
+            body: JSON.stringify({
+                certificate: cert,
+                include_root: includeRoot,
+            })
         });
         const data = await res.json();
 
         renderChainResult(data);
 
         if (data.success) {
+            const withRoot = data.root_included ? ' (with root)' : '';
             setStatus('verifyStatus',
-                `Chain built: ${data.chain.length} certificate(s)`, 'green');
+                `Chain built: ${data.chain.length} certificate(s)${withRoot}`,
+                'green');
         } else {
             setStatus('verifyStatus', 'Chain built with warnings', 'orange');
         }
@@ -422,6 +520,7 @@ async function buildChain() {
 function renderChainResult(data) {
     const wrap = document.getElementById('chainResult');
     const content = document.getElementById('chainResultContent');
+    if (!wrap || !content) return;
 
     const chain = data.chain || [];
     const errors = data.errors || [];
@@ -440,6 +539,12 @@ function renderChainResult(data) {
         html += '</ul>';
     }
 
+    if (data.found_root && !data.root_included && data.excluded_root) {
+        const s = data.excluded_root.subject || '(unknown)';
+        html += `<p class="hint">Self-signed root <b>${escapeHtml(s)}</b> was found `
+             + `but not included. Enable "Include self-signed root" and rebuild to add it.</p>`;
+    }
+
     if (!chain.length) {
         content.innerHTML = html + '<p class="muted">No chain could be built.</p>';
         wrap.style.display = 'block';
@@ -448,18 +553,15 @@ function renderChainResult(data) {
 
     html += '<div class="chain-viz">';
     chain.forEach((item, i) => {
-        if (i > 0) {
-            const prevOk = true;
-            html += `<div class="chain-arrow ${prevOk ? 'ok' : 'bad'}">→</div>`;
-        }
-        const cls = item.type === 'root' ? 'root ' : '';
+        if (i > 0) html += '<div class="chain-arrow ok">→</div>';
+        const cls = item.self_signed ? 'root ' : '';
         html += chainNode(item.type, item.info.subject_cn, cls + 'ok');
     });
     html += '</div>';
 
     html += '<table><thead><tr>' +
         '<th>#</th><th>Type</th><th>Subject CN</th><th>Issuer CN</th>' +
-        '<th>Valid until</th><th>Source</th>' +
+        '<th>Self-signed</th><th>Valid until</th><th>Source</th>' +
         '</tr></thead><tbody>';
 
     chain.forEach((item, i) => {
@@ -468,11 +570,15 @@ function renderChainResult(data) {
             : item.source === 'local_store' ? 'Local CA store'
             : item.source === 'input' ? 'Input'
             : item.source || '—';
+        const selfSignedCell = item.self_signed
+            ? '<span class="tag-ok">yes</span>'
+            : '<span class="muted">no</span>';
         html += `<tr>
             <td>${i + 1}</td>
             <td>${escapeHtml(item.type)}</td>
             <td>${escapeHtml(info.subject_cn || '—')}</td>
             <td>${escapeHtml(info.issuer_cn || '—')}</td>
+            <td>${selfSignedCell}</td>
             <td>${escapeHtml(fmtDate(info.not_after))}</td>
             <td>${escapeHtml(sourceLabel)}</td>
         </tr>`;
@@ -491,12 +597,15 @@ function useBuiltChain() {
     const chain = window._lastBuiltChain || [];
     if (!chain.length) return;
 
-    const intermediates = chain.slice(1)
+    const intermediates = chain
+        .slice(1)
+        .filter(item => item.type !== 'root')
         .map(item => item.pem.trim())
         .filter(Boolean);
 
     if (!intermediates.length) {
-        setStatus('verifyStatus', 'No intermediate certificates in built chain', 'orange');
+        setStatus('verifyStatus',
+            'No intermediate certificates in built chain', 'orange');
         return;
     }
 
@@ -566,14 +675,47 @@ async function runLiveCheck() {
     }
 }
 
+/* ============ Live-chain download helpers ============ */
+let _lastLiveChainPem = [];
+
+function downloadLivePem(which) {
+    const chain = _lastLiveChainPem || [];
+    if (!chain.length) return;
+
+    let content, filename;
+    if (which === 'leaf') {
+        content = chain[0];
+        filename = 'server-certificate.pem';
+    } else {
+        content = chain.join('\n');
+        filename = 'fullchain.pem';
+    }
+    const blob = new Blob([content], {type: 'application/x-pem-file'});
+    downloadBlob(blob, filename);
+}
+
+function copyLivePem(which) {
+    const chain = _lastLiveChainPem || [];
+    if (!chain.length) return;
+    const content = which === 'leaf' ? chain[0] : chain.join('\n');
+    navigator.clipboard.writeText(content).then(() => {
+        showNotification('Copied to clipboard', 'success');
+    }).catch(e => {
+        showNotification('Copy failed: ' + e, 'error');
+    });
+}
+
 function renderVerifyResult(data, targetId) {
     const el = document.getElementById(targetId || 'verifyResult');
+    if (!el) return;
+
+    if (data.chain_pem) _lastLiveChainPem = data.chain_pem;
+
     const c = data.certificate;
     const chain = data.chain || {};
 
     let html = '';
 
-    /* Chain visualization */
     html += '<div class="step"><h2>Chain</h2>';
     html += '<div class="chain-viz">';
 
@@ -602,7 +744,6 @@ function renderVerifyResult(data, targetId) {
 
     html += '</div></div>';
 
-    /* Errors / warnings */
     if ((data.errors && data.errors.length) || (data.warnings && data.warnings.length)) {
         html += '<div class="step"><h2>Issues</h2><ul class="err-list">';
         (data.errors || []).forEach(e => {
@@ -614,7 +755,6 @@ function renderVerifyResult(data, targetId) {
         html += '</ul></div>';
     }
 
-    /* Connection */
     if (data.connection) {
         const cc = data.connection;
         html += '<div class="step verify-details"><h2>Connection</h2><table>';
@@ -631,10 +771,24 @@ function renderVerifyResult(data, targetId) {
             html += rowHtml('Verification error',
                 `<span class="tag-bad">${escapeHtml(cc.verify_error)}</span>`);
         }
-        html += '</table></div>';
+        html += '</table>';
+
+        if (_lastLiveChainPem && _lastLiveChainPem.length) {
+            html += '<div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">';
+            html += '<button type="button" class="small" onclick="downloadLivePem(\'leaf\')">Download leaf (PEM)</button>';
+            if (_lastLiveChainPem.length > 1) {
+                html += '<button type="button" class="small" onclick="downloadLivePem(\'chain\')">Download full chain (PEM)</button>';
+            }
+            html += '<button type="button" class="small" onclick="copyLivePem(\'leaf\')">Copy leaf</button>';
+            if (_lastLiveChainPem.length > 1) {
+                html += '<button type="button" class="small" onclick="copyLivePem(\'chain\')">Copy full chain</button>';
+            }
+            html += '</div>';
+        }
+
+        html += '</div>';
     }
 
-    /* Details */
     html += '<div class="step verify-details"><h2>Details</h2>';
 
     if (c) {
@@ -730,7 +884,6 @@ const PKCS12_TARGETS = ['pkcs12', 'pkcs12-p12', 'pkcs12-b64', 'pfx', 'pfx-b64'];
 
 let convFileB64 = null;
 
-/* Defensive helpers: tolerate pages where optional elements are missing. */
 function _el(id) { return document.getElementById(id); }
 
 function _friendlyName() {
@@ -750,44 +903,50 @@ function _resetPasswords() {
     if (p2) p2.value = '';
 }
 
-document.getElementById('convFile').addEventListener('change', e => {
-    const f = e.target.files[0];
-    if (!f) {
-        convFileB64 = null;
-        document.getElementById('convFileName').textContent = '';
-        return;
-    }
-    convFileB64 = null;
-    fileToBase64(f).then(b64 => { convFileB64 = b64; });
-    document.getElementById('convFileName').textContent = `${f.name} (${f.size} bytes)`;
-    document.getElementById('convText').value = '';
-});
+(function wireConvertInputs() {
+    const fileEl = document.getElementById('convFile');
+    const textEl = document.getElementById('convText');
+    if (!fileEl || !textEl) return;
 
-document.getElementById('convText').addEventListener('input', e => {
-    if (e.target.value.trim()) {
-        document.getElementById('convFile').value = '';
-        document.getElementById('convFileName').textContent = '';
-        convFileB64 = null;
-    }
-});
-
-document.querySelectorAll('input[name="outFormat"]').forEach(r => {
-    r.addEventListener('change', () => {
-        const isPkcs12 = PKCS12_TARGETS.includes(r.value);
-        const box = _el('outPassWrap');
-        if (box) box.style.display = isPkcs12 ? 'block' : 'none';
-
-        if (!isPkcs12) {
-            _resetPasswords();
-            _resetFriendlyName();
+    fileEl.addEventListener('change', e => {
+        const f = e.target.files[0];
+        if (!f) {
+            convFileB64 = null;
+            document.getElementById('convFileName').textContent = '';
+            return;
         }
+        convFileB64 = null;
+        fileToBase64(f).then(b64 => { convFileB64 = b64; });
+        document.getElementById('convFileName').textContent = `${f.name} (${f.size} bytes)`;
+        textEl.value = '';
+    });
 
-        document.querySelectorAll('.format-grid label').forEach(l => {
-            const inp = l.querySelector('input');
-            l.classList.toggle('selected', inp && inp.checked);
+    textEl.addEventListener('input', e => {
+        if (e.target.value.trim()) {
+            fileEl.value = '';
+            document.getElementById('convFileName').textContent = '';
+            convFileB64 = null;
+        }
+    });
+
+    document.querySelectorAll('input[name="outFormat"]').forEach(r => {
+        r.addEventListener('change', () => {
+            const isPkcs12 = PKCS12_TARGETS.includes(r.value);
+            const box = _el('outPassWrap');
+            if (box) box.style.display = isPkcs12 ? 'block' : 'none';
+
+            if (!isPkcs12) {
+                _resetPasswords();
+                _resetFriendlyName();
+            }
+
+            document.querySelectorAll('.format-grid label').forEach(l => {
+                const inp = l.querySelector('input');
+                l.classList.toggle('selected', inp && inp.checked);
+            });
         });
     });
-});
+})();
 
 function buildConvertPayload() {
     const text = document.getElementById('convText').value;
@@ -1044,12 +1203,18 @@ function injectGsIntermediate() {
     }
 
     const chainEl = document.getElementById('vChain');
-    const hadContent = chainEl.value.trim().length > 0;
-    chainEl.value = item.pem.trim() + '\n';
+    const existing = chainEl.value.trim();
+    const pem = item.pem.trim();
+
+    if (existing.includes(pem)) {
+        setStatus('verifyStatus', 'This intermediate is already in the chain', 'orange');
+        return;
+    }
+
+    chainEl.value = existing ? existing + '\n\n' + pem + '\n' : pem + '\n';
 
     setStatus('verifyStatus',
-        (hadContent ? 'Replaced chain with ' : 'Inserted ') + item.label,
-        'green');
+        'Appended ' + item.label + ' to the end of the chain', 'green');
 }
 
 function clearGsIntermediate() {

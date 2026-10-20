@@ -313,3 +313,20 @@ th { background: var(--table-header-bg); }
 }
 .hint { font-size: 12px; color: var(--muted); margin-top: 6px; }
 .hint-block { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+
+.inline-checkbox {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-left: 12px;
+    font-size: 13px;
+    cursor: pointer;
+    user-select: none;
+    color: var(--fg);
+}
+.inline-checkbox input[type="checkbox"] {
+    width: auto;
+    margin: 0;
+    padding: 0;
+    cursor: pointer;
+}

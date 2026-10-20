@@ -134,6 +134,10 @@
         <br>
         <button id="btnVerify" onclick="runVerify()">Verify</button>
         <button id="btnBuildChain" onclick="buildChain()">Build chain</button>
+        <label class="inline-checkbox" title="Append the self-signed root certificate to the chain">
+            <input type="checkbox" id="includeRoot">
+            <span>Include self-signed root</span>
+        </label>
         <button type="button" onclick="clearVerify()">Clear</button>
         <div class="status" id="verifyStatus"></div>
 
