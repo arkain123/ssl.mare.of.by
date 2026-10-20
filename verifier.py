@@ -1,5 +1,6 @@
 import base64
 import logging
+import os
 import re
 import socket
 import ssl
@@ -19,12 +20,22 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+
+def _env_int(name, default):
+    try:
+        return int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
 PEM_BEGIN = "-----BEGIN CERTIFICATE-----"
 PEM_END = "-----END CERTIFICATE-----"
 
-MAX_CHAIN_DEPTH = 10
-AIA_TIMEOUT = 10
-USER_AGENT = "ssl.mare.of.by-chain-builder/1.0"
+MAX_CHAIN_DEPTH = _env_int("CHAIN_MAX_DEPTH", 10)
+AIA_TIMEOUT = _env_int("AIA_FETCH_TIMEOUT", 10)
+USER_AGENT = os.getenv("AIA_USER_AGENT", "SSL-Tools-Chain-Builder/1.0")
+CERT_EXPIRY_WARN_DAYS = _env_int("CERT_EXPIRY_WARN_DAYS", 14)
+LIVE_CHECK_TIMEOUT = _env_int("LIVE_CHECK_TIMEOUT", 10)
 
 # ---------------------------------------------------------------------------
 # Low-level helpers
@@ -195,6 +206,7 @@ def _cert_info(cert):
         "not_before": not_before.isoformat(),
         "not_after": not_after.isoformat(),
         "days_left": days_left,
+        "warn_threshold_days": CERT_EXPIRY_WARN_DAYS,
         "expired": now > not_after,
         "not_yet_valid": now < not_before,
         "domains": sorted(domains),
@@ -626,7 +638,7 @@ def build_certificate_chain(cert_pem, include_root=False):
 # Live certificate fetching
 # ---------------------------------------------------------------------------
 
-def fetch_remote_certificate(hostname, port=443, timeout=10):
+def fetch_remote_certificate(hostname, port=443, timeout=LIVE_CHECK_TIMEOUT):
     logger.info("[live] connecting to %s:%d", hostname, port)
     chain_pem_list = []
     tls_version = None

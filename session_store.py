@@ -5,8 +5,9 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-# Must be a Path, not a str: code below uses .glob(), .unlink(), .exists().
-SESSIONS_DIR = Path(__file__).resolve().parent / "sessions"
+_base = os.getenv("BASE_DIR") or os.path.dirname(os.path.abspath(__file__))
+_rel = os.getenv("SESSIONS_DIR", "sessions")
+SESSIONS_DIR = Path(_rel) if os.path.isabs(_rel) else Path(_base) / _rel
 SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
 
 

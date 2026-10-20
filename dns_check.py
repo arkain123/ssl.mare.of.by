@@ -1,4 +1,13 @@
+"""
+DNS TXT resolution for ACME challenges.
+
+Queries public resolvers over TCP (like `dig +tcp @8.8.8.8 name TXT`) and
+returns the TXT payload(s). Uses dnspython, so no external `dig` binary
+is required. Resolver list and timeouts are configurable via .env.
+"""
+
 import logging
+import os
 
 import dns.exception
 import dns.message
@@ -8,12 +17,35 @@ import dns.rdatatype
 
 logger = logging.getLogger(__name__)
 
-ACME_DNS_SERVERS = ["8.8.8.8", "1.1.1.1", "9.9.9.9"]
-QUERY_TIMEOUT = 3  # seconds per nameserver
+
+def _env_list(name, default):
+    raw = os.getenv(name, "")
+    if not raw.strip():
+        return list(default)
+    return [x.strip() for x in raw.split(",") if x.strip()]
 
 
-def resolve_txt_records(fqdn, nameservers=None, timeout=QUERY_TIMEOUT):
+def _env_int(name, default):
+    try:
+        return int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
+ACME_DNS_SERVERS = _env_list("NAMESERVERS", ["8.8.8.8", "1.1.1.1", "9.9.9.9"])
+QUERY_TIMEOUT = _env_int("DNS_QUERY_TIMEOUT", 3)
+
+
+def resolve_txt_records(fqdn, nameservers=None, timeout=None):
+    """
+    Resolve TXT records for `fqdn` via TCP against public resolvers.
+
+    Returns (values, error):
+      - values: list[str] of TXT payloads (empty list if none found)
+      - error:  None on success, or a string describing the last fatal error
+    """
     nameservers = nameservers or ACME_DNS_SERVERS
+    timeout = timeout if timeout is not None else QUERY_TIMEOUT
     last_error = None
 
     for ns in nameservers:
@@ -55,8 +87,6 @@ def _query_txt_tcp(fqdn, ns, timeout):
         if rrset.rdtype != dns.rdatatype.TXT:
             continue
         for rdata in rrset:
-            # RFC 7208: a single TXT value may be split into multiple
-            # character-strings; concatenate them.
             text = b"".join(rdata.strings).decode("utf-8", errors="replace")
             values.append(text)
 

@@ -320,7 +320,10 @@ function renderVerifyResult(data, targetId) {
         html += row('Issuer', c.issuer);
         html += row('Valid from', fmtDate(c.not_before));
         html += row('Valid until', fmtDate(c.not_after));
-        const daysCls = c.expired ? 'tag-bad' : (c.days_left < 14 ? 'tag-warn' : 'tag-ok');
+        const warnDays = window.CERT_EXPIRY_WARN_DAYS || 14;
+        const daysCls = c.expired
+            ? 'tag-bad'
+            : (c.days_left < warnDays ? 'tag-warn' : 'tag-ok');
         html += rowHtml('Days left', `<span class="${daysCls}">${c.days_left}</span>`);
         html += row('Serial', c.serial);
         html += row('Signature algorithm', c.signature_algorithm);

@@ -14,18 +14,47 @@ function readRememberedSession() {
     catch (e) { return null; }
 }
 
-/* ============ Issue: DNS auto-check ============ */
-const DNS_AUTO_INTERVAL_MS = 30_000;
-const DNS_AUTO_MAX_ATTEMPTS = 240;
-const DNS_AUTO_START_DELAY_MS = 3_000;
+const DNS_AUTO_CONFIG = {
+    interval_ms: 30000,    // defaults - used until /api/config responds
+    max_attempts: 240,
+    start_delay_ms: 3000,
+};
 
+let _configPromise = null;
+
+function loadAppConfig() {
+    if (_configPromise) return _configPromise;
+    _configPromise = fetch('/api/config')
+        .then(r => r.json())
+        .then(data => {
+            if (data.dns_auto_interval_ms)   DNS_AUTO_CONFIG.interval_ms = data.dns_auto_interval_ms;
+            if (data.dns_auto_max_attempts)  DNS_AUTO_CONFIG.max_attempts = data.dns_auto_max_attempts;
+            if (data.dns_auto_start_delay_ms) DNS_AUTO_CONFIG.start_delay_ms = data.dns_auto_start_delay_ms;
+            if (data.cert_expiry_warn_days)  window.CERT_EXPIRY_WARN_DAYS = data.cert_expiry_warn_days;
+            console.log('[config] loaded:', data);
+            return DNS_AUTO_CONFIG;
+        })
+        .catch(e => {
+            console.warn('[config] fetch failed, using defaults:', e);
+            return DNS_AUTO_CONFIG;
+        });
+    return _configPromise;
+}
+
+// Kick off immediately on page load
+loadAppConfig();
+
+/* ============ Issue: DNS auto-check ============ */
 let dnsAutoTimer = null;
 let dnsAutoAttempts = 0;
 let dnsAutoActive = false;
 
-function dnsAutoStart() {
+async function dnsAutoStart() {
     dnsAutoStop();
     if (!sessionId) return;
+
+    // Wait for config (or fall back to defaults if it fails)
+    await loadAppConfig();
 
     dnsAutoActive = true;
     dnsAutoAttempts = 0;
@@ -34,8 +63,8 @@ function dnsAutoStart() {
     if (toggle) toggle.checked = true;
     updateDnsAutoIndicator('Auto-check: waiting for first tick...', 'orange');
 
-    log('DNS auto-check enabled (every ' + (DNS_AUTO_INTERVAL_MS / 1000) + 's)');
-    dnsAutoScheduleNext(DNS_AUTO_START_DELAY_MS);
+    log('DNS auto-check enabled (every ' + (DNS_AUTO_CONFIG.interval_ms / 1000) + 's)');
+    dnsAutoScheduleNext(DNS_AUTO_CONFIG.start_delay_ms);
 }
 
 function dnsAutoStop(reason) {
@@ -67,13 +96,13 @@ async function dnsAutoTick() {
 
     dnsAutoAttempts += 1;
 
-    if (dnsAutoAttempts > DNS_AUTO_MAX_ATTEMPTS) {
-        dnsAutoStop('max attempts reached (' + DNS_AUTO_MAX_ATTEMPTS + ')');
+    if (dnsAutoAttempts > DNS_AUTO_CONFIG.max_attempts) {
+        dnsAutoStop('max attempts reached (' + DNS_AUTO_CONFIG.max_attempts + ')');
         return;
     }
 
     updateDnsAutoIndicator(
-        'Auto-check: attempt ' + dnsAutoAttempts + '/' + DNS_AUTO_MAX_ATTEMPTS + '...',
+        'Auto-check: attempt ' + dnsAutoAttempts + '/' + DNS_AUTO_CONFIG.max_attempts + '...',
         'orange');
 
     try {
@@ -102,10 +131,10 @@ async function dnsAutoTick() {
             return;
         }
 
-        dnsAutoScheduleNext(DNS_AUTO_INTERVAL_MS);
+        dnsAutoScheduleNext(DNS_AUTO_CONFIG.interval_ms);
     } catch (e) {
         log('Auto-check error: ' + e.message);
-        dnsAutoScheduleNext(DNS_AUTO_INTERVAL_MS);
+        dnsAutoScheduleNext(DNS_AUTO_CONFIG.interval_ms);
     }
 }
 

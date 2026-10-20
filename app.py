@@ -1,3 +1,4 @@
+import os
 import sys
 import uuid
 import base64
@@ -10,14 +11,18 @@ from verifier import verify_inputs, fetch_remote_certificate, build_certificate_
 
 
 logging.basicConfig(
-    level=logging.INFO,
+    level=os.getenv("LOG_LEVEL", "INFO").upper(),
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     stream=sys.stdout,
     force=True,
 )
 logger = logging.getLogger(__name__)
 
+CONVERT_MAX_INLINE_TEXT_BYTES = int(os.getenv("CONVERT_MAX_INLINE_TEXT_BYTES", "65536"))
+CONVERT_MAX_UPLOAD_MB = int(os.getenv("CONVERT_MAX_UPLOAD_MB", "10"))
+
 app = Flask(__name__)
+app.config["MAX_CONTENT_LENGTH"] = CONVERT_MAX_UPLOAD_MB * 1024 * 1024
 manager = ACMEManager()
 
 
@@ -48,6 +53,16 @@ def index():
     logger.info("[http] GET / from %s", request.remote_addr)
     return render_template("index.html")
 
+
+@app.route("/api/config", methods=["GET"])
+def api_config():
+    return jsonify({
+        "dns_auto_interval_ms":    int(os.getenv("DNS_AUTO_INTERVAL_MS", "30000")),
+        "dns_auto_max_attempts":   int(os.getenv("DNS_AUTO_MAX_ATTEMPTS", "240")),
+        "dns_auto_start_delay_ms": int(os.getenv("DNS_AUTO_START_DELAY_MS", "3000")),
+        "cert_expiry_warn_days":   int(os.getenv("CERT_EXPIRY_WARN_DAYS", "14")),
+        "convert_max_inline_text_bytes": CONVERT_MAX_INLINE_TEXT_BYTES,
+    })
 
 # ---------------------------------------------------------------------------
 # Routes - ACME
@@ -452,11 +467,12 @@ def api_convert_output():
     files = []
     for name, content in outputs.items():
         is_text = _is_text_content(name, content)
+        show_text = is_text and len(content) <= CONVERT_MAX_INLINE_TEXT_BYTES
         files.append({
             "name": name,
             "b64": base64.b64encode(content).decode("ascii"),
             "size": len(content),
-            "text": content.decode("utf-8", errors="replace") if is_text else None,
+            "text": content.decode("utf-8", errors="replace") if show_text else None,
         })
 
     logger.info("[api/convert/output] produced %d file(s)", len(files))

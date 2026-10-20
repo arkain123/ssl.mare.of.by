@@ -1,12 +1,13 @@
 import os
 import logging
-import session_store
 from datetime import datetime, timezone
 from dotenv import load_dotenv
-from simple_acme_dns import ACMEClient
-from dns_check import resolve_txt_records
 from cryptography.hazmat.primitives import serialization
 from cryptography import x509
+
+from simple_acme_dns import ACMEClient
+from dns_check import resolve_txt_records
+import session_store
 
 load_dotenv()
 
@@ -14,14 +15,11 @@ logger = logging.getLogger(__name__)
 
 LE_URL = os.getenv("LE_URL", "https://acme-v02.api.letsencrypt.org/directory")
 ACCOUNT_EMAIL = os.getenv("ACCOUNT_EMAIL")
-NAMESERVERS = os.getenv("NAMESERVERS", "1.1.1.1,8.8.8.8").split(",")
+NAMESERVERS = [x.strip() for x in os.getenv("NAMESERVERS", "8.8.8.8,1.1.1.1").split(",") if x.strip()]
 
-# Fallback to the directory of this file so the app works even without
-# a .env (previously os.getenv("BASE_DIR") returned None and os.path.join
-# would raise).
 BASE_DIR = os.getenv("BASE_DIR") or os.path.dirname(os.path.abspath(__file__))
-ACCOUNTS_DIR = os.path.join(BASE_DIR, "accounts")
-CERTS_DIR = os.path.join(BASE_DIR, "certs")
+ACCOUNTS_DIR = os.path.join(BASE_DIR, os.getenv("ACCOUNTS_DIR", "accounts"))
+CERTS_DIR    = os.path.join(BASE_DIR, os.getenv("CERTS_DIR", "certs"))
 os.makedirs(ACCOUNTS_DIR, exist_ok=True)
 os.makedirs(CERTS_DIR, exist_ok=True)
 
