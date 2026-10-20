@@ -16,7 +16,7 @@ function readRememberedSession() {
 
 /* ============ Issue: DNS auto-check ============ */
 const DNS_AUTO_INTERVAL_MS = 30_000;
-const DNS_AUTO_MAX_ATTEMPTS = 40;
+const DNS_AUTO_MAX_ATTEMPTS = 240;
 const DNS_AUTO_START_DELAY_MS = 3_000;
 
 let dnsAutoTimer = null;
