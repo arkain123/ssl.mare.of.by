@@ -63,7 +63,14 @@
             <tbody></tbody>
         </table>
         <button id="btnCheck" onclick="checkDNS()">Check DNS</button>
+
+        <label class="inline-checkbox" title="Automatically poll DNS every 30 seconds until records propagate">
+            <input type="checkbox" id="dnsAutoToggle" onchange="onDnsAutoToggle(this)">
+            <span>Auto-check every 30s</span>
+        </label>
+
         <div class="status" id="dnsStatus"></div>
+        <div class="status" id="dnsAutoStatus" style="font-weight:normal; font-size:12px;"></div>
     </div>
 
     <div class="step" id="step3" style="display:none">
