@@ -4,9 +4,10 @@ import base64
 import logging
 from flask import Flask, request, jsonify, render_template
 from acme_manager import ACMEManager
-from verifier import verify_inputs, fetch_remote_certificate
-from converter import parse_anything, serialize_bundle, bundle_summary
+from converter import parse_anything, serialize_bundle, bundle_summary, PKCS12_TARGETS
 from globalsign_catalog import grouped_catalog
+from verifier import verify_inputs, fetch_remote_certificate, build_certificate_chain
+
 
 logging.basicConfig(
     level=logging.INFO,
@@ -157,7 +158,6 @@ def api_session_get(session_id):
         loaded = session_store.load_session(session_id)
         if not loaded:
             return jsonify({"success": False, "error": "Session not found"}), 404
-        # Metadata-only fallback (client was not restored)
         logger.info("[api/sessions/%s] served from disk (no client)", session_id)
         return jsonify({"success": True, **_session_public(loaded, session_id)})
 
@@ -177,6 +177,41 @@ def api_session_delete(session_id):
 # ---------------------------------------------------------------------------
 # Routes - Verify
 # ---------------------------------------------------------------------------
+
+@app.route("/api/build_chain", methods=["POST"])
+def api_build_chain():
+    data = request.get_json(silent=True) or {}
+    cert_pem = (data.get("certificate") or "").strip()
+
+    if not cert_pem:
+        return jsonify({
+            "success": False,
+            "errors": ["Certificate is required"],
+            "chain": [],
+            "warnings": [],
+        }), 400
+
+    logger.info("[api/build_chain] input=%d bytes", len(cert_pem))
+
+    try:
+        result = build_certificate_chain(cert_pem)
+    except Exception as e:
+        logger.exception("[api/build_chain] failed: %s", e)
+        return jsonify({
+            "success": False,
+            "errors": [str(e)],
+            "chain": [],
+            "warnings": [],
+        }), 500
+
+    logger.info(
+        "[api/build_chain] built %d cert(s), errors=%d warnings=%d",
+        len(result.get("chain", [])),
+        len(result.get("errors", [])),
+        len(result.get("warnings", [])),
+    )
+    return jsonify(result)
+
 
 @app.route("/api/verify", methods=["POST"])
 def api_verify():
@@ -310,11 +345,26 @@ def api_convert_output():
     target = data.get("target", "") or ""
     out_pw = data.get("output_password", "") or ""
     out_pw2 = data.get("output_password_confirm", "") or ""
+    friendly_name = (data.get("friendly_name", "") or "").strip()
 
     if not target:
         return jsonify({"success": False, "error": "Target format is required"}), 400
-    if out_pw != out_pw2:
-        return jsonify({"success": False, "error": "Passwords do not match"}), 400
+
+    # PKCS#12 targets require a password. Other targets ignore it entirely,
+    # so leftover values from a previously-selected format cannot block us.
+    if target in PKCS12_TARGETS:
+        if not out_pw:
+            return jsonify({
+                "success": False,
+                "error": "PKCS#12 (PFX) output requires a password (passphrase)",
+            }), 400
+        if out_pw != out_pw2:
+            return jsonify({
+                "success": False,
+                "error": "Output passwords do not match",
+            }), 400
+    else:
+        out_pw = out_pw2 = friendly_name = ""
 
     try:
         raw = _read_convert_payload(data)
@@ -330,7 +380,16 @@ def api_convert_output():
         return jsonify({"success": False, "error": str(e)}), 500
 
     try:
-        outputs = serialize_bundle(bundle, target, output_password=out_pw)
+        outputs = serialize_bundle(
+            bundle,
+            target,
+            output_password=out_pw,
+            output_password_confirm=out_pw2 or None,
+            friendly_name=friendly_name,
+        )
+    except ValueError as e:
+        logger.warning("[api/convert/output] rejected: %s", e)
+        return jsonify({"success": False, "error": str(e)}), 400
     except Exception as e:
         logger.exception("[api/convert/output] serialize failed: %s", e)
         return jsonify({"success": False, "error": str(e)}), 500

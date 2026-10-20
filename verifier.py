@@ -1,14 +1,34 @@
+import base64
 import logging
+import re
 import socket
 import ssl
+import urllib.request
 from datetime import datetime, timezone
+
 from cryptography import x509
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import rsa, ec, padding
 from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import rsa, ec, padding
+
+try:
+    import certifi
+    HAS_CERTIFI = True
+except ImportError:
+    HAS_CERTIFI = False
 
 logger = logging.getLogger(__name__)
 
+PEM_BEGIN = "-----BEGIN CERTIFICATE-----"
+PEM_END = "-----END CERTIFICATE-----"
+
+MAX_CHAIN_DEPTH = 10
+AIA_TIMEOUT = 10
+USER_AGENT = "ssl.mare.of.by-chain-builder/1.0"
+
+# ---------------------------------------------------------------------------
+# Low-level helpers
+# ---------------------------------------------------------------------------
 
 def _cert_item_to_pem(item):
     if isinstance(item, (bytes, bytearray)):
@@ -20,31 +40,27 @@ def _cert_item_to_pem(item):
         except Exception as e:
             logger.warning("[live] cannot convert DER to PEM: %s", e)
             return None
-
     if hasattr(item, "public_bytes"):
         try:
             return item.public_bytes(ssl.ENCODING_PEM).decode()
         except Exception as e:
             logger.warning("[live] public_bytes failed: %s", e)
             return None
-
     logger.warning("[live] unknown chain item type: %r", type(item))
     return None
 
 
 def _load_certs(pem_text):
     certs = []
-    begin = "-----BEGIN CERTIFICATE-----"
-    end = "-----END CERTIFICATE-----"
     pos = 0
     while True:
-        s = pem_text.find(begin, pos)
+        s = pem_text.find(PEM_BEGIN, pos)
         if s == -1:
             break
-        e = pem_text.find(end, s)
+        e = pem_text.find(PEM_END, s)
         if e == -1:
             break
-        e += len(end)
+        e += len(PEM_END)
         block = pem_text[s:e].encode()
         try:
             certs.append(x509.load_pem_x509_certificate(block))
@@ -75,7 +91,6 @@ def _verify_issued_by(child, issuer):
             return True
         except Exception:
             return False
-
     try:
         pub = issuer.public_key()
         sig = child.signature
@@ -155,9 +170,12 @@ def _key_matches_cert(key_obj, cert):
         return False
 
 
+# ---------------------------------------------------------------------------
+# Public API: verify user-provided bundle
+# ---------------------------------------------------------------------------
+
 def verify_inputs(cert_pem, chain_pem, key_pem):
     errors, warnings = [], []
-
     try:
         leaf = x509.load_pem_x509_certificate(cert_pem.encode())
     except Exception as e:
@@ -281,9 +299,229 @@ def verify_inputs(cert_pem, chain_pem, key_pem):
     return result
 
 
+# ---------------------------------------------------------------------------
+# Chain building: AIA chasing + local CA store fallback
+# ---------------------------------------------------------------------------
+
+def _aia_ca_issuers_url(cert):
+    """Extract the first CA Issuers URL from the AIA extension."""
+    try:
+        aia = cert.extensions.get_extension_for_class(x509.AuthorityInformationAccess)
+    except x509.ExtensionNotFound:
+        return None
+
+    for access_description in aia.value:
+        if access_description.access_method == x509.oid.AuthorityInformationAccessOID.CA_ISSUERS:
+            loc = access_description.access_location
+            if isinstance(loc, x509.UniformResourceIdentifier):
+                return loc.value
+    return None
+
+
+def _fetch_cert_from_url(url):
+    """Download a certificate (PEM or DER) from a URL."""
+    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    with urllib.request.urlopen(req, timeout=AIA_TIMEOUT) as resp:
+        body = resp.read()
+
+    # Try PEM first
+    if b"-----BEGIN CERTIFICATE-----" in body:
+        certs = _load_certs(body.decode("utf-8", errors="replace"))
+        if certs:
+            return certs[0]
+
+    # Try DER
+    try:
+        return x509.load_der_x509_certificate(body)
+    except Exception:
+        pass
+
+    # Try base64-wrapped DER
+    try:
+        text = body.decode("ascii", errors="ignore")
+        stripped = "".join(text.split())
+        der = base64.b64decode(stripped)
+        return x509.load_der_x509_certificate(der)
+    except Exception:
+        pass
+
+    return None
+
+
+def _load_system_ca_store():
+    """Load CA certificates from certifi or the system default store."""
+    paths = []
+
+    if HAS_CERTIFI:
+        try:
+            paths.append(certifi.where())
+        except Exception:
+            pass
+
+    # Fallback to system openssl default paths
+    try:
+        defaults = ssl.get_default_verify_paths()
+        for p in (defaults.cafile, defaults.openssl_cafile):
+            if p:
+                paths.append(p)
+    except Exception:
+        pass
+
+    paths.extend([
+        "/etc/ssl/certs/ca-certificates.crt",
+        "/etc/ssl/certs/ca-bundle.crt",
+        "/etc/pki/tls/certs/ca-bundle.crt",
+        "/usr/local/ssl/certs/ca-bundle.crt",
+    ])
+
+    certs = []
+    seen = set()
+    for path in dict.fromkeys(paths):  # deduplicate while preserving order
+        if not path:
+            continue
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as f:
+                content = f.read()
+        except Exception:
+            continue
+        for cert in _load_certs(content):
+            fp = cert.fingerprint(hashes.SHA256())
+            if fp in seen:
+                continue
+            seen.add(fp)
+            certs.append(cert)
+
+    logger.info("[chain] loaded %d CA certificate(s) from local store", len(certs))
+    return certs
+
+
+def _find_issuer_in_store(child, store):
+    """Find a certificate in the store that issued `child`."""
+    for candidate in store:
+        if candidate.subject != child.issuer:
+            continue
+        if _verify_issued_by(child, candidate):
+            return candidate
+    return None
+
+
+def _cert_to_pem(cert):
+    return cert.public_bytes(serialization.Encoding.PEM).decode("ascii")
+
+
+def build_certificate_chain(cert_pem):
+    errors = []
+    warnings = []
+
+    try:
+        leaf = x509.load_pem_x509_certificate(cert_pem.encode())
+    except Exception as e:
+        return {
+            "success": False,
+            "chain": [],
+            "errors": [f"Cannot parse certificate: {e}"],
+            "warnings": [],
+        }
+
+    store = _load_system_ca_store()
+
+    chain = [{
+        "cert": leaf,
+        "pem": cert_pem.strip() + "\n",
+        "type": "leaf",
+        "source": "input",
+    }]
+
+    current = leaf
+    seen_serials = {leaf.serial_number}
+
+    for _ in range(MAX_CHAIN_DEPTH):
+        # Self-signed root?
+        if current.subject == current.issuer:
+            chain[-1]["type"] = "root"
+            break
+
+        issuer = None
+        source = None
+
+        # 1) AIA
+        aia_url = _aia_ca_issuers_url(current)
+        if aia_url:
+            try:
+                issuer = _fetch_cert_from_url(aia_url)
+                if issuer is not None:
+                    source = "aia"
+            except Exception as e:
+                logger.warning("[chain] AIA fetch failed for %s: %s", aia_url, e)
+                warnings.append(f"AIA download failed for {aia_url}: {e}")
+
+        # 2) Local store
+        if issuer is None:
+            issuer = _find_issuer_in_store(current, store)
+            if issuer is not None:
+                source = "local_store"
+
+        if issuer is None:
+            errors.append(
+                f"Could not find issuer for {_short_name(current.subject)} "
+                f"({_short_name(current.issuer)})"
+            )
+            chain[-1]["type"] = "root"  # mark last known as root-ish
+            break
+
+        # Avoid loops
+        if issuer.serial_number in seen_serials:
+            warnings.append(
+                f"Loop detected: {_short_name(issuer.subject)} already in chain"
+            )
+            break
+        seen_serials.add(issuer.serial_number)
+
+        chain.append({
+            "cert": issuer,
+            "pem": _cert_to_pem(issuer),
+            "type": "intermediate",
+            "source": source,
+        })
+        current = issuer
+
+    else:
+        errors.append(f"Maximum chain depth ({MAX_CHAIN_DEPTH}) reached")
+
+    # Post-process types
+    for i, item in enumerate(chain):
+        if item["cert"].subject == item["cert"].issuer:
+            item["type"] = "root"
+        elif i == 0:
+            item["type"] = "leaf"
+        else:
+            item["type"] = "intermediate"
+
+    # Attach info and strip internal `cert` object
+    result_chain = []
+    for item in chain:
+        info = _cert_info(item["cert"])
+        result_chain.append({
+            "pem": item["pem"],
+            "info": info,
+            "type": item["type"],
+            "source": item["source"],
+        })
+
+    return {
+        "success": len(result_chain) > 0 and len(errors) == 0,
+        "chain": result_chain,
+        "errors": errors,
+        "warnings": warnings,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Live certificate fetching
+# ---------------------------------------------------------------------------
+
 def fetch_remote_certificate(hostname, port=443, timeout=10):
     logger.info("[live] connecting to %s:%d", hostname, port)
-
     chain_pem_list = []
     tls_version = None
     cipher_info = None
@@ -293,12 +531,10 @@ def fetch_remote_certificate(hostname, port=443, timeout=10):
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
         ctx.minimum_version = ssl.TLSVersion.TLSv1_2
-
         with socket.create_connection((hostname, port), timeout=timeout) as sock:
             with ctx.wrap_socket(sock, server_hostname=hostname) as ssock:
                 tls_version = ssock.version()
                 cipher_info = ssock.cipher()
-
                 if hasattr(ssock, "get_unverified_chain"):
                     for item in ssock.get_unverified_chain():
                         pem = _cert_item_to_pem(item)
@@ -308,7 +544,6 @@ def fetch_remote_certificate(hostname, port=443, timeout=10):
                     der = ssock.getpeercert(binary_form=True)
                     if der:
                         chain_pem_list.append(ssl.DER_cert_to_PEM_cert(der))
-
     except Exception as e:
         logger.warning("[live] fetch failed: %s", e)
         return {

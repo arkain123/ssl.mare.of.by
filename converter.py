@@ -3,6 +3,10 @@ Universal certificate format converter.
 
 Parses PEM, DER, PFX/P12, PKCS#7, and base64-encoded inputs into a normalized
 Bundle, then serializes the Bundle into any supported output format.
+
+PKCS#12 targets ('pkcs12', 'pkcs12-p12', 'pkcs12-b64'; legacy aliases
+'pfx' and 'pfx-b64') require an output password. Unencrypted PKCS#12 is
+deliberately not produced.
 """
 
 import base64
@@ -24,6 +28,9 @@ except ImportError:
     HAS_PKCS7 = False
 
 logger = logging.getLogger(__name__)
+
+
+PKCS12_TARGETS = ("pkcs12", "pkcs12-p12", "pkcs12-b64", "pfx", "pfx-b64")
 
 
 # ---------------------------------------------------------------------------
@@ -152,7 +159,6 @@ def _dispatch_pem_block(label, block_pem, body, password, bundle):
 def _parse_der_into(raw: bytes, password: str, bundle: Bundle) -> bool:
     pw = password.encode() if password else None
 
-    # PFX / PKCS#12
     try:
         key, cert, extra = pkcs12.load_key_and_certificates(raw, pw)
         if key or cert:
@@ -164,7 +170,6 @@ def _parse_der_into(raw: bytes, password: str, bundle: Bundle) -> bool:
     except Exception:
         pass
 
-    # PKCS#7 / P7B
     if HAS_PKCS7:
         try:
             certs = pkcs7.load_der_pkcs7_certificates(raw)
@@ -176,7 +181,6 @@ def _parse_der_into(raw: bytes, password: str, bundle: Bundle) -> bool:
         except Exception:
             pass
 
-    # Single certificate
     try:
         bundle.certificate = x509.load_der_x509_certificate(raw)
         bundle.source_format = "der-cert"
@@ -184,7 +188,6 @@ def _parse_der_into(raw: bytes, password: str, bundle: Bundle) -> bool:
     except Exception:
         pass
 
-    # Private key
     try:
         bundle.private_key = serialization.load_der_private_key(raw, password=pw)
         bundle.source_format = "der-key"
@@ -192,7 +195,6 @@ def _parse_der_into(raw: bytes, password: str, bundle: Bundle) -> bool:
     except Exception:
         pass
 
-    # CSR
     try:
         bundle.csr = x509.load_der_x509_csr(raw)
         bundle.source_format = "der-csr"
@@ -200,7 +202,6 @@ def _parse_der_into(raw: bytes, password: str, bundle: Bundle) -> bool:
     except Exception:
         pass
 
-    # Public key
     try:
         bundle.public_key = serialization.load_der_public_key(raw)
         bundle.source_format = "der-pubkey"
@@ -221,14 +222,12 @@ def parse_anything(raw, password: str = "") -> Bundle:
     raw = raw.strip()
     bundle = Bundle()
 
-    # PEM?
     if b"-----BEGIN " in raw:
         _parse_pem_into(raw, password, bundle)
         if bundle.empty and not bundle.warnings:
             raise ValueError("No usable PEM blocks found")
         return bundle
 
-    # Base64-encoded binary?
     if _looks_like_base64(raw):
         try:
             stripped = b"".join(raw.split())
@@ -239,7 +238,6 @@ def parse_anything(raw, password: str = "") -> Bundle:
         except Exception as e:
             logger.warning("base64 decode attempt failed: %s", e)
 
-    # Plain DER?
     if _looks_like_der(raw):
         if _parse_der_into(raw, password, bundle):
             return bundle
@@ -341,14 +339,53 @@ def _pem_key(key, fmt=serialization.PrivateFormat.PKCS8) -> bytes:
     )
 
 
+def _serialize_pkcs12(bundle: Bundle, password: str, friendly_name: str = "") -> bytes:
+    """Build an encrypted PKCS#12 / PFX. Password is mandatory."""
+    if not bundle.private_key:
+        raise ValueError("PKCS#12 requires a private key")
+    if not bundle.certificate:
+        raise ValueError("PKCS#12 requires a certificate")
+    if not password:
+        raise ValueError(
+            "PKCS#12 (PFX) output requires a password (passphrase). "
+            "Set 'output_password' in the request."
+        )
+    pw = password.encode("utf-8")
+    name = (friendly_name or "").encode("utf-8") or None
+    return pkcs12.serialize_key_and_certificates(
+        name=name,
+        key=bundle.private_key,
+        cert=bundle.certificate,
+        cas=list(bundle.chain) if bundle.chain else None,
+        encryption_algorithm=serialization.BestAvailableEncryption(pw),
+    )
+
+
+def _validate_pkcs12_password(output_password: str,
+                              output_password_confirm: Optional[str]) -> None:
+    if not output_password:
+        raise ValueError(
+            "PKCS#12 (PFX) output requires a password (passphrase). "
+            "Set 'output_password' in the request."
+        )
+    if output_password_confirm is not None and output_password != output_password_confirm:
+        raise ValueError("Password confirmation does not match")
+
+
 def serialize_bundle(bundle: Bundle, target: str,
-                     output_password: str = "") -> dict:
+                     output_password: str = "",
+                     output_password_confirm: Optional[str] = None,
+                     friendly_name: str = "") -> dict:
     """
     Serialize `bundle` into `target` format.
 
-    Returns a dict {filename: bytes}. Raises ValueError if required
-    components are missing.
+    PKCS#12 targets: 'pkcs12' (-> .pfx), 'pkcs12-p12' (-> .p12),
+    'pkcs12-b64' (base64 text). Legacy aliases 'pfx' and 'pfx-b64'
+    are accepted and behave like 'pkcs12' / 'pkcs12-b64'.
     """
+    if target in PKCS12_TARGETS:
+        _validate_pkcs12_password(output_password, output_password_confirm)
+
     outputs = {}
 
     if target == "pem-separate":
@@ -413,41 +450,21 @@ def serialize_bundle(bundle: Bundle, target: str,
             certs, serialization.Encoding.PEM
         )
 
-    elif target == "pfx":
-        if not bundle.private_key:
-            raise ValueError("PFX requires a private key")
-        if not bundle.certificate:
-            raise ValueError("PFX requires a certificate")
-        pw = output_password.encode() if output_password else None
-        enc = (serialization.BestAvailableEncryption(pw)
-               if pw else serialization.NoEncryption())
-        pfx = pkcs12.serialize_key_and_certificates(
-            name=None,
-            key=bundle.private_key,
-            cert=bundle.certificate,
-            cas=list(bundle.chain) if bundle.chain else None,
-            encryption_algorithm=enc,
+    elif target in ("pkcs12", "pfx"):
+        outputs["certificate.pfx"] = _serialize_pkcs12(
+            bundle, output_password, friendly_name
         )
-        outputs["certificate.pfx"] = pfx
 
-    elif target == "pfx-b64":
-        if not bundle.private_key:
-            raise ValueError("PFX requires a private key")
-        if not bundle.certificate:
-            raise ValueError("PFX requires a certificate")
-        pw = output_password.encode() if output_password else None
-        enc = (serialization.BestAvailableEncryption(pw)
-               if pw else serialization.NoEncryption())
-        pfx = pkcs12.serialize_key_and_certificates(
-            name=None,
-            key=bundle.private_key,
-            cert=bundle.certificate,
-            cas=list(bundle.chain) if bundle.chain else None,
-            encryption_algorithm=enc,
+    elif target == "pkcs12-p12":
+        outputs["certificate.p12"] = _serialize_pkcs12(
+            bundle, output_password, friendly_name
         )
+
+    elif target in ("pkcs12-b64", "pfx-b64"):
+        pfx = _serialize_pkcs12(bundle, output_password, friendly_name)
         b64 = base64.b64encode(pfx).decode("ascii")
         wrapped = "\n".join(b64[i:i + 64] for i in range(0, len(b64), 64))
-        outputs["certificate.pfx.txt"] = (wrapped + "\n").encode("ascii")
+        outputs["certificate.p12.txt"] = (wrapped + "\n").encode("ascii")
 
     elif target == "pubkey-pem":
         pub = _pubkey_of(bundle)

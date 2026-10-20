@@ -370,6 +370,127 @@ function clearVerify() {
     setStatus('verifyStatus', '', '');
 }
 
+async function buildChain() {
+    const cert = document.getElementById('vCert').value.trim();
+    if (!cert) {
+        setStatus('verifyStatus', 'Certificate is required', 'red');
+        return;
+    }
+
+    const btn = document.getElementById('btnBuildChain');
+    btn.disabled = true;
+    setStatus('verifyStatus', 'Building chain...', 'orange');
+
+    try {
+        const res = await fetch('/api/build_chain', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({certificate: cert})
+        });
+        const data = await res.json();
+
+        renderChainResult(data);
+
+        if (data.success) {
+            setStatus('verifyStatus',
+                `Chain built: ${data.chain.length} certificate(s)`, 'green');
+        } else {
+            setStatus('verifyStatus', 'Chain built with warnings', 'orange');
+        }
+    } catch (e) {
+        setStatus('verifyStatus', 'Error: ' + e.message, 'red');
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+function renderChainResult(data) {
+    const wrap = document.getElementById('chainResult');
+    const content = document.getElementById('chainResultContent');
+
+    const chain = data.chain || [];
+    const errors = data.errors || [];
+    const warnings = data.warnings || [];
+
+    let html = '';
+
+    if (errors.length) {
+        html += '<ul class="err-list">';
+        errors.forEach(e => html += `<li class="err">${escapeHtml(e)}</li>`);
+        html += '</ul>';
+    }
+    if (warnings.length) {
+        html += '<ul class="err-list">';
+        warnings.forEach(w => html += `<li class="warn">${escapeHtml(w)}</li>`);
+        html += '</ul>';
+    }
+
+    if (!chain.length) {
+        content.innerHTML = html + '<p class="muted">No chain could be built.</p>';
+        wrap.style.display = 'block';
+        return;
+    }
+
+    html += '<div class="chain-viz">';
+    chain.forEach((item, i) => {
+        if (i > 0) {
+            const prevOk = true;
+            html += `<div class="chain-arrow ${prevOk ? 'ok' : 'bad'}">→</div>`;
+        }
+        const cls = item.type === 'root' ? 'root ' : '';
+        html += chainNode(item.type, item.info.subject_cn, cls + 'ok');
+    });
+    html += '</div>';
+
+    html += '<table><thead><tr>' +
+        '<th>#</th><th>Type</th><th>Subject CN</th><th>Issuer CN</th>' +
+        '<th>Valid until</th><th>Source</th>' +
+        '</tr></thead><tbody>';
+
+    chain.forEach((item, i) => {
+        const info = item.info || {};
+        const sourceLabel = item.source === 'aia' ? 'AIA download'
+            : item.source === 'local_store' ? 'Local CA store'
+            : item.source === 'input' ? 'Input'
+            : item.source || '—';
+        html += `<tr>
+            <td>${i + 1}</td>
+            <td>${escapeHtml(item.type)}</td>
+            <td>${escapeHtml(info.subject_cn || '—')}</td>
+            <td>${escapeHtml(info.issuer_cn || '—')}</td>
+            <td>${escapeHtml(fmtDate(info.not_after))}</td>
+            <td>${escapeHtml(sourceLabel)}</td>
+        </tr>`;
+    });
+    html += '</tbody></table>';
+
+    html += `<button type="button" class="small" onclick="useBuiltChain()">Use as intermediate chain</button>`;
+
+    content.innerHTML = html;
+    wrap.style.display = 'block';
+
+    window._lastBuiltChain = chain;
+}
+
+function useBuiltChain() {
+    const chain = window._lastBuiltChain || [];
+    if (!chain.length) return;
+
+    const intermediates = chain.slice(1)
+        .map(item => item.pem.trim())
+        .filter(Boolean);
+
+    if (!intermediates.length) {
+        setStatus('verifyStatus', 'No intermediate certificates in built chain', 'orange');
+        return;
+    }
+
+    const chainEl = document.getElementById('vChain');
+    chainEl.value = intermediates.join('\n\n') + '\n';
+    setStatus('verifyStatus',
+        `Inserted ${intermediates.length} intermediate certificate(s)`, 'green');
+}
+
 async function runVerify() {
     const cert = document.getElementById('vCert').value;
     const chain = document.getElementById('vChain').value;
@@ -590,7 +711,29 @@ function chainNode(label, name, cls, unknown) {
 }
 
 /* ============ Convert ============ */
+const PKCS12_TARGETS = ['pkcs12', 'pkcs12-p12', 'pkcs12-b64', 'pfx', 'pfx-b64'];
+
 let convFileB64 = null;
+
+/* Defensive helpers: tolerate pages where optional elements are missing. */
+function _el(id) { return document.getElementById(id); }
+
+function _friendlyName() {
+    const el = _el('outFriendlyName');
+    return el ? el.value.trim() : '';
+}
+
+function _resetFriendlyName() {
+    const el = _el('outFriendlyName');
+    if (el) el.value = '';
+}
+
+function _resetPasswords() {
+    const p1 = _el('outConvPass');
+    const p2 = _el('outConvPassConfirm');
+    if (p1) p1.value = '';
+    if (p2) p2.value = '';
+}
 
 document.getElementById('convFile').addEventListener('change', e => {
     const f = e.target.files[0];
@@ -615,8 +758,15 @@ document.getElementById('convText').addEventListener('input', e => {
 
 document.querySelectorAll('input[name="outFormat"]').forEach(r => {
     r.addEventListener('change', () => {
-        const isPfx = r.value === 'pfx';
-        document.getElementById('outPassWrap').style.display = isPfx ? 'block' : 'none';
+        const isPkcs12 = PKCS12_TARGETS.includes(r.value);
+        const box = _el('outPassWrap');
+        if (box) box.style.display = isPkcs12 ? 'block' : 'none';
+
+        if (!isPkcs12) {
+            _resetPasswords();
+            _resetFriendlyName();
+        }
+
         document.querySelectorAll('.format-grid label').forEach(l => {
             const inp = l.querySelector('input');
             l.classList.toggle('selected', inp && inp.checked);
@@ -643,12 +793,13 @@ function clearConvert() {
     document.getElementById('convFileName').textContent = '';
     document.getElementById('convText').value = '';
     document.getElementById('convPass').value = '';
-    document.getElementById('outConvPass').value = '';
-    document.getElementById('outConvPassConfirm').value = '';
+    _resetPasswords();
+    _resetFriendlyName();
     document.getElementById('step-detected').style.display = 'none';
     document.getElementById('step-output').style.display = 'none';
     document.getElementById('step-result').style.display = 'none';
-    document.getElementById('outPassWrap').style.display = 'none';
+    const box = _el('outPassWrap');
+    if (box) box.style.display = 'none';
     setStatus('inspectStatus', '', '');
     setStatus('convertStatus', '', '');
     convFileB64 = null;
@@ -731,12 +882,31 @@ async function runConvert() {
     catch (e) { setStatus('convertStatus', e.message, 'red'); return; }
 
     payload.target = (document.querySelector('input[name="outFormat"]:checked') || {}).value;
-    payload.output_password = document.getElementById('outConvPass').value;
-    payload.output_password_confirm = document.getElementById('outConvPassConfirm').value;
+    const p1 = _el('outConvPass');
+    const p2 = _el('outConvPassConfirm');
+    payload.output_password = p1 ? p1.value : '';
+    payload.output_password_confirm = p2 ? p2.value : '';
+    payload.friendly_name = _friendlyName();
 
     if (!payload.target) {
         setStatus('convertStatus', 'Select an output format', 'red');
         return;
+    }
+
+    const isPkcs12 = PKCS12_TARGETS.includes(payload.target);
+    if (isPkcs12) {
+        if (!payload.output_password) {
+            setStatus('convertStatus', 'PKCS#12 requires an output password', 'red');
+            return;
+        }
+        if (payload.output_password !== payload.output_password_confirm) {
+            setStatus('convertStatus', 'Output passwords do not match', 'red');
+            return;
+        }
+    } else {
+        payload.output_password = '';
+        payload.output_password_confirm = '';
+        payload.friendly_name = '';
     }
 
     const btn = document.getElementById('btnConvert');

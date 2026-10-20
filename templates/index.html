@@ -133,8 +133,15 @@
 
         <br>
         <button id="btnVerify" onclick="runVerify()">Verify</button>
+        <button id="btnBuildChain" onclick="buildChain()">Build chain</button>
         <button type="button" onclick="clearVerify()">Clear</button>
         <div class="status" id="verifyStatus"></div>
+
+        <div id="chainResult" class="step" style="display:none; margin-top:16px;">
+            <h2>Built chain</h2>
+            <div id="chainResultContent"></div>
+        </div>
+
     </div>
 
     <div id="verifyResult" style="display:none;"></div>
@@ -194,6 +201,15 @@
     <div class="step" id="step-output" style="display:none;">
         <h2>3. Output format</h2>
         <div class="format-grid" id="formatGrid">
+            <label><input type="radio" name="outFormat" value="pkcs12">
+                <span>PKCS#12 / PFX (.pfx)<span class="fmt-desc">Windows / IIS / Tomcat - password required</span></span></label>
+
+            <label><input type="radio" name="outFormat" value="pkcs12-p12">
+                <span>PKCS#12 / P12 (.p12)<span class="fmt-desc">Cross-platform / OpenSSL - password required</span></span></label>
+
+            <label><input type="radio" name="outFormat" value="pkcs12-b64">
+                <span>PKCS#12 - base64 text<span class="fmt-desc">as produced by keytool / certutil -encode</span></span></label>
+
             <label><input type="radio" name="outFormat" value="pem-separate" checked>
                 <span>PEM - separate files<span class="fmt-desc">certificate.crt, chain.crt, private.key - nginx / Apache</span></span></label>
 
@@ -215,12 +231,6 @@
             <label><input type="radio" name="outFormat" value="pkcs7-pem">
                 <span>PKCS#7 / P7B - PEM<span class="fmt-desc">cert + chain as PEM-wrapped P7B</span></span></label>
 
-            <label><input type="radio" name="outFormat" value="pfx">
-                <span>PFX / PKCS#12<span class="fmt-desc">Windows / IIS / Tomcat - password required</span></span></label>
-
-            <label><input type="radio" name="outFormat" value="pfx-b64">
-                <span>PFX / PKCS#12 - base64 text<span class="fmt-desc">as produced by keytool / certutil -encode</span></span></label>
-
             <label><input type="radio" name="outFormat" value="pubkey-pem">
                 <span>Public key - PEM<span class="fmt-desc">SPKI public key</span></span></label>
 
@@ -232,7 +242,11 @@
         </div>
 
         <div id="outPassWrap" class="password-box" style="display:none;">
-            <label><b>Output password</b></label>
+            <label><b>Friendly name</b> (optional)</label>
+            <input type="text" id="outFriendlyName" placeholder="e.g. example.com" autocomplete="off">
+            <p class="hint">Displayed in the Windows certificate store. Leave empty if unsure.</p>
+
+            <label style="display:block; margin-top:10px;"><b>Output password</b></label>
             <input type="password" id="outConvPass" autocomplete="new-password">
             <label style="display:block; margin-top:8px;"><b>Confirm password</b></label>
             <input type="password" id="outConvPassConfirm" autocomplete="new-password">
