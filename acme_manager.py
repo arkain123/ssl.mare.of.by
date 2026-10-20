@@ -5,6 +5,7 @@ import session_store
 from datetime import datetime, timezone
 from dotenv import load_dotenv
 from simple_acme_dns import ACMEClient
+from dns_check import resolve_txt_records
 
 load_dotenv()
 
@@ -104,51 +105,36 @@ class ACMEManager:
     def check_dns(self, session_id):
         session = self.sessions.get(session_id)
         if not session:
-            logger.warning("[check] session %s not found", session_id)
             return False, "Session not found"
 
-        tokens = session["tokens"]
-        logger.info("[check] session=%s, checking %d FQDN(s)", session_id, len(tokens))
-
-        resolver = dns.resolver.Resolver()
-        resolver.nameservers = NAMESERVERS
-        resolver.timeout = 5
-        resolver.lifetime = 5
+        tokens = session.get("tokens") or {}
+        if not tokens:
+            return False, "No TXT tokens in this session"
 
         missing = []
-        for fqdn, expected_list in tokens.items():
-            logger.info("[check] querying TXT %s via %s", fqdn, NAMESERVERS)
-            found = []
-            try:
-                answers = resolver.resolve(fqdn, "TXT")
-                for rdata in answers:
-                    txt = b"".join(rdata.strings).decode("utf-8", errors="replace")
-                    found.append(txt)
-                logger.info("[check]   found %d TXT value(s):", len(found))
-                for v in found:
-                    logger.info("[check]     %s", v)
-            except dns.resolver.NXDOMAIN:
-                logger.warning("[check]   NXDOMAIN for %s", fqdn)
-            except dns.resolver.NoAnswer:
-                logger.warning("[check]   no TXT answer for %s", fqdn)
-            except dns.resolver.NoNameservers:
-                logger.warning("[check]   no nameservers responded for %s", fqdn)
-            except Exception as e:
-                logger.exception("[check]   query failed for %s: %s", fqdn, e)
+        mismatched = []
 
-            for token in expected_list:
-                if token in found:
-                    logger.info("[check]   OK: token %s present", token)
-                else:
-                    logger.warning("[check]   MISSING: token %s", token)
-                    missing.append((fqdn, token))
+        for fqdn, expected_values in tokens.items():
+            found, err = resolve_txt_records(fqdn)
+            if err:
+                return False, f"DNS lookup failed for {fqdn}: {err}"
+
+            if not found:
+                missing.append(fqdn)
+                continue
+
+            for expected in expected_values:
+                if expected not in found:
+                    mismatched.append(
+                        f"{fqdn}: expected {expected!r}, got {found!r}"
+                    )
 
         if missing:
-            logger.warning("[check] result: %d token(s) missing", len(missing))
-            return False, f"{len(missing)} TXT value(s) missing. Verify DNS and try again."
+            return False, "TXT record not published yet: " + ", ".join(missing)
+        if mismatched:
+            return False, "TXT mismatch: " + "; ".join(mismatched)
 
-        logger.info("[check] result: all records found")
-        return True, "All records found"
+        return True, "All TXT records verified via public DNS"
 
     def issue_certificate(self, session_id):
         logger.info("[issue] session=%s", session_id)
