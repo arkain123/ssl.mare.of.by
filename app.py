@@ -90,6 +90,20 @@ def api_check():
     if not session_id:
         return jsonify({"error": "Missing session_id"}), 400
 
+    session = manager.sessions.get(session_id)
+    if not session:
+        return jsonify({
+            "success": False,
+            "message": "Session not found or expired. Please create a new request.",
+        })
+
+    if not session.get("client"):
+        return jsonify({
+            "success": False,
+            "message": "ACME client was not restored (server restart). "
+                       "Please create a new request.",
+        })
+
     success, message = manager.check_dns(session_id)
     logger.info("[api/check] success=%s message=%s", success, message)
     return jsonify({"success": success, "message": message})
@@ -105,8 +119,15 @@ def api_issue():
 
     session = manager.sessions.get(session_id)
     if not session:
-        logger.warning("[api/issue] session %s not found", session_id)
-        return jsonify({"error": "Session not found"}), 404
+        return jsonify({
+            "error": "Session not found or expired. Please create a new request."
+        }), 404
+
+    if not session.get("client"):
+        return jsonify({
+            "error": "ACME client was not restored (server restart). "
+                     "Please create a new request."
+        }), 400
 
     try:
         result = manager.issue_certificate(session_id)
@@ -121,6 +142,9 @@ def api_issue():
                 "key": result["key_path"],
             },
         })
+    except ValueError as e:
+        logger.warning("[api/issue] rejected: %s", e)
+        return jsonify({"error": str(e)}), 400
     except Exception as e:
         logger.exception("[api/issue] failed: %s", e)
         return jsonify({"error": str(e)}), 500
@@ -153,12 +177,29 @@ def api_sessions_list():
 @app.route("/api/sessions/<session_id>", methods=["GET"])
 def api_session_get(session_id):
     session = manager.sessions.get(session_id)
+
     if not session:
         import session_store
         loaded = session_store.load_session(session_id)
         if not loaded:
             return jsonify({"success": False, "error": "Session not found"}), 404
-        logger.info("[api/sessions/%s] served from disk (no client)", session_id)
+
+        # Rebuild the ACME client from persisted state so that
+        # /api/check and /api/issue work on any device / after restart.
+        if not loaded.get("client") and loaded.get("client_state"):
+            try:
+                from acme_manager import _client_from_state
+                client = _client_from_state(loaded["client_state"])
+                if client:
+                    loaded["client"] = client
+                    logger.info("[api/sessions/%s] client rebuilt from state",
+                                session_id)
+            except Exception as e:
+                logger.warning("[api/sessions/%s] rebuild failed: %s",
+                               session_id, e)
+
+        manager.sessions[session_id] = loaded
+        logger.info("[api/sessions/%s] restored from disk into memory", session_id)
         return jsonify({"success": True, **_session_public(loaded, session_id)})
 
     logger.info("[api/sessions/%s] served from memory", session_id)

@@ -218,18 +218,22 @@ async function restoreSession(id) {
         document.getElementById('step2').style.display = 'block';
         document.getElementById('step3').style.display = 'block';
 
+        const checkBtn = document.getElementById('btnCheck');
         const issueBtn = document.getElementById('btnIssue');
+
         if (data.has_client) {
+            if (checkBtn) checkBtn.disabled = false;
             issueBtn.disabled = true;
             setStatus('dnsStatus',
-                'Session restored (' + n + ' TXT record(s)). Click "Check DNS" to continue.',
+                `Session restored (${n} TXT record(s)). Click "Check DNS" to continue.`,
                 'green');
         } else {
+            if (checkBtn) checkBtn.disabled = true;
             issueBtn.disabled = true;
             setStatus('dnsStatus',
-                'Session restored, but the ACME client could not be recovered. ' +
-                'Please create a new request.',
-                'orange');
+                'Session metadata was restored, but the ACME client could not be ' +
+                'recovered (server restart). Please create a new request.',
+                'red');
         }
 
         log('Restored session ' + sessionId + ' with ' + n + ' token(s).');
@@ -303,6 +307,7 @@ async function createRequest() {
 
 async function checkDNS() {
     const btn = document.getElementById('btnCheck');
+    if (!btn) return;
     btn.disabled = true;
     setStatus('dnsStatus', 'Checking DNS...', 'orange');
     log('DNS check started...');
@@ -315,17 +320,27 @@ async function checkDNS() {
         });
         const data = await res.json();
         if (data.success) {
-            setStatus('dnsStatus', 'All records found! You can now issue the certificate.', 'green');
+            setStatus('dnsStatus',
+                'All records found! You can now issue the certificate.', 'green');
             document.getElementById('btnIssue').disabled = false;
             log('DNS records successfully propagated.');
         } else {
-            setStatus('dnsStatus', data.message, 'red');
-            log('Check failed: ' + data.message);
-            btn.disabled = false;
+            setStatus('dnsStatus', data.message || 'Check failed', 'red');
+            log('Check failed: ' + (data.message || 'unknown error'));
+            if (data.message && /not found|not restored|expired/i.test(data.message)) {
+                document.getElementById('btnIssue').disabled = true;
+                btn.disabled = true;
+                return;
+            }
         }
     } catch (e) {
         setStatus('dnsStatus', 'Error: ' + e.message, 'red');
-        btn.disabled = false;
+        log('Check error: ' + e.message);
+    } finally {
+        if (btn && !/not found|not restored|expired/i.test(
+                document.getElementById('dnsStatus').textContent || '')) {
+            btn.disabled = false;
+        }
     }
 }
 

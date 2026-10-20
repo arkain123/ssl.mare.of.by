@@ -84,6 +84,56 @@ def _is_ca(cert):
         return False
 
 
+def _find_chain_path(leaf, chain_certs, max_depth=15):
+    leaf_fp = leaf.fingerprint(hashes.SHA256())
+    unique = []
+    seen = {leaf_fp}
+    for c in chain_certs:
+        fp = c.fingerprint(hashes.SHA256())
+        if fp in seen:
+            continue
+        seen.add(fp)
+        unique.append(c)
+
+    def _dfs(current, remaining, path, depth):
+        if depth >= max_depth:
+            return list(path)
+        if current.subject == current.issuer:
+            return list(path)
+
+        best = list(path)
+        for i, cand in enumerate(remaining):
+            if cand.subject != current.issuer:
+                continue
+            if not _verify_issued_by(current, cand):
+                continue
+            path.append(cand)
+            result = _dfs(cand, remaining[:i] + remaining[i + 1:], path, depth + 1)
+            if len(result) > len(best):
+                best = result
+            path.pop()
+
+        return best
+
+    ordered = _dfs(leaf, unique, [], 0)
+
+    links = []
+    prev = leaf
+    for curr in ordered:
+        links.append({
+            "from": _short_name(prev.subject),
+            "to": _short_name(curr.subject),
+            "verified": _verify_issued_by(prev, curr),
+        })
+        prev = curr
+
+    ordered_fps = {c.fingerprint(hashes.SHA256()) for c in ordered}
+    unused = [c for c in unique if c.fingerprint(hashes.SHA256()) not in ordered_fps]
+    complete = bool(ordered) and ordered[-1].subject == ordered[-1].issuer
+
+    return ordered, links, unused, complete
+
+
 def _verify_issued_by(child, issuer):
     if hasattr(child, "verify_directly_issued_by"):
         try:
@@ -214,81 +264,103 @@ def verify_inputs(cert_pem, chain_pem, key_pem):
 
     # --- Chain ---
     chain_certs = _load_certs(chain_pem) if chain_pem and chain_pem.strip() else []
-    links = []
-    nodes = [{
-        "label": "Leaf",
-        "name": result["certificate"]["subject_cn"],
-        "ok": not (result["certificate"]["expired"] or result["certificate"]["not_yet_valid"]),
-    }]
 
     if chain_certs:
-        ok = _verify_issued_by(leaf, chain_certs[0])
-        links.append({
-            "from": _short_name(leaf.subject),
-            "to": _short_name(chain_certs[0].subject),
-            "verified": ok,
-        })
-        if not ok:
-            errors.append(f"Leaf is not signed by {_short_name(chain_certs[0].subject)}")
+        ordered, links, unused, complete = _find_chain_path(leaf, chain_certs)
 
-        for i in range(len(chain_certs) - 1):
-            child = chain_certs[i]
-            issuer = chain_certs[i + 1]
-            ok = _verify_issued_by(child, issuer)
-            links.append({
-                "from": _short_name(child.subject),
-                "to": _short_name(issuer.subject),
-                "verified": ok,
-            })
-            if not ok:
-                errors.append(
-                    f"{_short_name(child.subject)} is not signed by {_short_name(issuer.subject)}"
+        if ordered:
+            nodes = [{
+                "label": "Leaf",
+                "name": result["certificate"]["subject_cn"],
+                "ok": not (result["certificate"]["expired"] or result["certificate"]["not_yet_valid"]),
+            }]
+            for i, (c, link) in enumerate(zip(ordered, links)):
+                is_last = i == len(ordered) - 1
+                is_self = c.subject == c.issuer
+                label = "Root" if (is_last and is_self) else "Intermediate"
+                nodes.append({
+                    "label": label,
+                    "name": _short_name(c.subject),
+                    "ok": link["verified"],
+                })
+
+            result["chain"] = {
+                "length": len(ordered),
+                "links": links,
+                "nodes": nodes,
+                "certificates": [
+                    {
+                        "subject": _short_name(c.subject),
+                        "issuer": _short_name(c.issuer),
+                        "is_ca": _is_ca(c),
+                        "self_signed": c.subject == c.issuer,
+                    }
+                    for c in ordered
+                ],
+                "root": {
+                    "subject": _short_name(ordered[-1].subject),
+                    "self_signed": complete,
+                },
+                "complete": complete,
+                "has_self_signed_root": complete,
+                "extra_count": len(unused),
+                "provided_count": len(chain_certs),
+            }
+
+            for i, link in enumerate(links):
+                if not link["verified"]:
+                    if i == 0:
+                        errors.append(f"Leaf is not signed by {link['to']}")
+                    else:
+                        errors.append(f"{link['from']} is not signed by {link['to']}")
+
+            if unused:
+                warnings.append(
+                    f"{len(unused)} extra certificate(s) provided but not part of the "
+                    "main chain (normal when including cross-signed variants for "
+                    "browser compatibility)"
                 )
 
-        for i, c in enumerate(chain_certs):
-            is_last = i == len(chain_certs) - 1
-            is_self = c.subject == c.issuer
-            if is_last:
-                label = "Root" if is_self else "Intermediate"
-            else:
-                label = "Intermediate"
-            nodes.append({
-                "label": label,
-                "name": _short_name(c.subject),
-                "ok": all(l["verified"] for l in links[:i + 1]),
-            })
-
-        last = chain_certs[-1]
-        result["chain"] = {
-            "length": len(chain_certs),
-            "links": links,
-            "nodes": nodes,
-            "certificates": [
-                {
-                    "subject": _short_name(c.subject),
-                    "issuer": _short_name(c.issuer),
-                    "is_ca": _is_ca(c),
-                    "self_signed": c.subject == c.issuer,
-                }
-                for c in chain_certs
-            ],
-            "root": {
-                "subject": _short_name(last.subject),
-                "self_signed": last.subject == last.issuer,
-            },
-            "complete": last.subject == last.issuer,
-            "has_self_signed_root": last.subject == last.issuer,
-        }
+            if not complete:
+                warnings.append(
+                    "Chain does not reach a self-signed root - normal for cross-signed "
+                    "intermediates; browsers may extend it via the OS trust store"
+                )
+        else:
+            errors.append(
+                f"None of the {len(chain_certs)} provided certificate(s) issued the leaf"
+            )
+            result["chain"] = {
+                "length": 0,
+                "links": [],
+                "nodes": [{
+                    "label": "Leaf",
+                    "name": result["certificate"]["subject_cn"],
+                    "ok": True,
+                }],
+                "certificates": [],
+                "root": None,
+                "complete": False,
+                "has_self_signed_root": False,
+                "extra_count": 0,
+                "provided_count": len(chain_certs),
+            }
     else:
         warnings.append("No intermediate chain provided - signature chain not verified")
         result["chain"] = {
             "length": 0,
             "links": [],
-            "nodes": nodes,
+            "nodes": [{
+                "label": "Leaf",
+                "name": result["certificate"]["subject_cn"],
+                "ok": True,
+            }],
             "certificates": [],
             "root": None,
             "complete": False,
             "has_self_signed_root": False,
+            "extra_count": 0,
+            "provided_count": 0,
         }
 
     result["chain"]["valid"] = (

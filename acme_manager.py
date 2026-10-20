@@ -1,11 +1,12 @@
 import os
 import logging
-import dns.resolver
 import session_store
 from datetime import datetime, timezone
 from dotenv import load_dotenv
 from simple_acme_dns import ACMEClient
 from dns_check import resolve_txt_records
+from cryptography.hazmat.primitives import serialization
+from cryptography import x509
 
 load_dotenv()
 
@@ -15,7 +16,10 @@ LE_URL = os.getenv("LE_URL", "https://acme-v02.api.letsencrypt.org/directory")
 ACCOUNT_EMAIL = os.getenv("ACCOUNT_EMAIL")
 NAMESERVERS = os.getenv("NAMESERVERS", "1.1.1.1,8.8.8.8").split(",")
 
-BASE_DIR = os.getenv("BASE_DIR")
+# Fallback to the directory of this file so the app works even without
+# a .env (previously os.getenv("BASE_DIR") returned None and os.path.join
+# would raise).
+BASE_DIR = os.getenv("BASE_DIR") or os.path.dirname(os.path.abspath(__file__))
 ACCOUNTS_DIR = os.path.join(BASE_DIR, "accounts")
 CERTS_DIR = os.path.join(BASE_DIR, "certs")
 os.makedirs(ACCOUNTS_DIR, exist_ok=True)
@@ -52,10 +56,135 @@ def _split_pem_chain(pem_bytes):
     return leaf, chain
 
 
+# ---------------------------------------------------------------------------
+# ACMEClient <-> JSON state
+# ---------------------------------------------------------------------------
+
+def _client_to_state(client, session_id):
+    """Serialize ACMEClient into JSON-friendly dict."""
+    private_key_pem = None
+    pk = getattr(client, "private_key", None)
+    if pk is not None:
+        if isinstance(pk, bytes):
+            private_key_pem = pk.decode("utf-8")
+        elif isinstance(pk, str):
+            private_key_pem = pk
+        else:
+            try:
+                private_key_pem = pk.private_bytes(
+                    encoding=serialization.Encoding.PEM,
+                    format=serialization.PrivateFormat.PKCS8,
+                    encryption_algorithm=serialization.NoEncryption(),
+                ).decode("ascii")
+            except Exception as e:
+                logger.warning("[state] cannot serialize private key: %s", e)
+
+    csr_pem = None
+    csr = getattr(client, "csr", None)
+    if csr is not None:
+        if isinstance(csr, bytes):
+            csr_pem = csr.decode("utf-8")
+        elif isinstance(csr, str):
+            csr_pem = csr
+        else:
+            try:
+                csr_pem = csr.public_bytes(serialization.Encoding.PEM).decode("ascii")
+            except Exception as e:
+                logger.warning("[state] cannot serialize CSR: %s", e)
+
+    return {
+        "account_file": os.path.join(ACCOUNTS_DIR, f"{session_id}.json"),
+        "private_key_pem": private_key_pem,
+        "csr_pem": csr_pem,
+        "domains": list(getattr(client, "domains", []) or []),
+        "directory": getattr(client, "directory", LE_URL),
+        "nameservers": list(getattr(client, "nameservers", []) or NAMESERVERS),
+    }
+
+
+def _client_from_state(state):
+    """Rebuild ACMEClient from persisted state. Returns None on failure."""
+    if not state or not state.get("account_file"):
+        return None
+
+    if not os.path.exists(state["account_file"]):
+        logger.warning("[restore] account file missing: %s", state["account_file"])
+        return None
+
+    try:
+        client = ACMEClient.load_account_from_file(state["account_file"])
+    except Exception as e:
+        logger.warning("[restore] load_account_from_file failed: %s", e)
+        return None
+
+    client.domains = state.get("domains") or []
+    client.directory = state.get("directory") or LE_URL
+    if state.get("nameservers"):
+        client.nameservers = state["nameservers"]
+
+    key_pem = state.get("private_key_pem")
+    if key_pem:
+        try:
+            client.private_key = serialization.load_pem_private_key(
+                key_pem.encode(), password=None
+            )
+        except Exception as e:
+            logger.warning("[restore] private key parse failed: %s", e)
+
+    csr_pem = state.get("csr_pem")
+    if csr_pem:
+        try:
+            client.csr = x509.load_pem_x509_csr(csr_pem.encode())
+        except Exception as e:
+            logger.warning("[restore] CSR parse failed: %s", e)
+
+    return client
+
+
+# ---------------------------------------------------------------------------
+# Manager
+# ---------------------------------------------------------------------------
+
 class ACMEManager:
     def __init__(self):
-        self.sessions = session_store.load_all()
+        self.sessions = {}
+        self._load_persisted_sessions()
+        self._hydrate_sessions()
         logger.info("[init] loaded %d persisted session(s)", len(self.sessions))
+
+    def _load_persisted_sessions(self):
+        for meta in session_store.list_metadata():
+            sid = meta["session_id"]
+            if sid in self.sessions:
+                continue
+            session = session_store.load_session(sid)
+            if session:
+                self.sessions[sid] = session
+
+    def _hydrate_sessions(self):
+        """Rebuild missing ACME clients from client_state."""
+        for sid, session in list(self.sessions.items()):
+            if session.get("client"):
+                continue
+            state = session.get("client_state")
+            if not state:
+                continue
+            client = _client_from_state(state)
+            if client:
+                session["client"] = client
+                logger.info("[hydrate] client restored for session %s", sid)
+            else:
+                logger.warning("[hydrate] could not rebuild client for %s", sid)
+
+    def _forget_session(self, session_id):
+        self.sessions.pop(session_id, None)
+        try:
+            session_store.delete_session(session_id)
+            logger.info("[cleanup] removed session %s after successful issuance",
+                        session_id)
+        except Exception as e:
+            logger.warning("[cleanup] failed to remove session %s from disk: %s",
+                           session_id, e)
 
     def create_request(self, session_id, domains):
         logger.info("[create] session=%s domains=%s", session_id, domains)
@@ -97,6 +226,7 @@ class ACMEManager:
             "domains": domains,
             "created_at": datetime.now(timezone.utc).isoformat(),
             "status": "pending",
+            "client_state": _client_to_state(client, session_id),
         }
         self.sessions[session_id] = session
         session_store.save_session(session_id, session)
@@ -164,6 +294,12 @@ class ACMEManager:
         key_pem = client.private_key
         if isinstance(key_pem, bytes):
             key_pem = key_pem.decode("utf-8")
+        if hasattr(key_pem, "private_bytes"):
+            key_pem = key_pem.private_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PrivateFormat.PKCS8,
+                encryption_algorithm=serialization.NoEncryption(),
+            ).decode("ascii")
         if not key_pem:
             raise ValueError("Empty private key received")
 
@@ -184,8 +320,12 @@ class ACMEManager:
             f.write(key_pem)
         logger.info("[issue] private key written to %s", key_path)
 
-        session_store.mark_issued(session_id)
-        self.sessions.pop(session_id, None)
+        try:
+            session_store.mark_issued(session_id)
+        except Exception:
+            pass
+
+        self._forget_session(session_id)
 
         return {
             "certificate": leaf_pem,
