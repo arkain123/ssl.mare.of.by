@@ -330,3 +330,21 @@ th { background: var(--table-header-bg); }
     padding: 0;
     cursor: pointer;
 }
+
+td.copyable {
+    cursor: pointer;
+    position: relative;
+    transition: background 0.15s;
+}
+td.copyable:hover {
+    background: var(--accent-bg);
+}
+td.copyable.copied {
+    background: var(--ok-bg) !important;
+    color: var(--ok);
+    font-weight: bold;
+    text-align: center;
+    font-size: 11px;
+    letter-spacing: 0.5px;
+    transition: none;
+}

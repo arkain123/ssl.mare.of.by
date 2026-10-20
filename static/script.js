@@ -134,6 +134,41 @@ function fileToBase64(file) {
     });
 }
 
+function copyCell(cell, rawText) {
+    copyText(rawText).then(() => {
+        const original = cell.textContent;
+        cell.classList.add('copied');
+        cell.textContent = 'Copied';
+        setTimeout(() => {
+            cell.textContent = original;
+            cell.classList.remove('copied');
+        }, 800);
+    }).catch(e => {
+        showNotification('Copy failed: ' + e.message, 'error');
+    });
+}
+
+function copyText(text) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        return navigator.clipboard.writeText(text);
+    }
+    return new Promise((resolve, reject) => {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        try {
+            document.execCommand('copy') ? resolve() : reject(new Error('execCommand failed'));
+        } catch (e) {
+            reject(e);
+        } finally {
+            document.body.removeChild(ta);
+        }
+    });
+}
+
 function showNotification(message, type) {
     const n = document.createElement('div');
     n.style.cssText = `
@@ -257,7 +292,12 @@ async function restoreSession(id) {
             if (Array.isArray(tokens)) {
                 tokens.forEach(t => {
                     if (!t || !t.fqdn || !t.value) return;
-                    tbody.innerHTML += `<tr><td>${escapeHtml(t.fqdn)}</td><td>${escapeHtml(t.value)}</td></tr>`;
+                    const fqdn = escapeHtml(t.fqdn);
+                    const val  = escapeHtml(t.value);
+                    tbody.innerHTML += `<tr>
+                        <td class="copyable" title="Click to copy" onclick="copyCell(this, '${fqdn}')">${fqdn}</td>
+                        <td class="copyable" title="Click to copy" onclick="copyCell(this, '${val}')">${val}</td>
+                    </tr>`;
                     n += 1;
                 });
             } else if (tokens && typeof tokens === 'object') {
@@ -266,7 +306,12 @@ async function restoreSession(id) {
                     const vals = Array.isArray(raw) ? raw : (raw ? [raw] : []);
                     vals.forEach(val => {
                         if (val == null) return;
-                        tbody.innerHTML += `<tr><td>${escapeHtml(fqdn)}</td><td>${escapeHtml(String(val))}</td></tr>`;
+                        const f = escapeHtml(fqdn);
+                        const v = escapeHtml(String(val));
+                        tbody.innerHTML += `<tr>
+                            <td class="copyable" title="Click to copy" onclick="copyCell(this, '${f}')">${f}</td>
+                            <td class="copyable" title="Click to copy" onclick="copyCell(this, '${v}')">${v}</td>
+                        </tr>`;
                         n += 1;
                     });
                 });
@@ -367,7 +412,12 @@ async function createRequest() {
         const tbody = document.querySelector('#tokensTable tbody');
         tbody.innerHTML = '';
         data.tokens.forEach(t => {
-            tbody.innerHTML += `<tr><td>${escapeHtml(t.fqdn)}</td><td>${escapeHtml(t.value)}</td></tr>`;
+        const fqdn = escapeHtml(t.fqdn);
+        const val  = escapeHtml(t.value);
+        tbody.innerHTML += `<tr>
+            <td class="copyable" title="Click to copy" onclick="copyCell(this, '${fqdn}')">${fqdn}</td>
+            <td class="copyable" title="Click to copy" onclick="copyCell(this, '${val}')">${val}</td>
+        </tr>`;
         });
 
         document.getElementById('step2').style.display = 'block';
