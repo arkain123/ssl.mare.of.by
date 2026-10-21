@@ -44,99 +44,13 @@ function loadAppConfig() {
 // Kick off immediately on page load
 loadAppConfig();
 
-/* ============ Issue: DNS auto-check ============ */
-let dnsAutoTimer = null;
-let dnsAutoAttempts = 0;
-let dnsAutoActive = false;
+/* ============ Issue: server-side DNS auto-check polling ============ */
+// The actual checking runs in a background thread on the server.
+// This module only polls /api/check_status to display progress and
+// toggle the on/off flag via /api/check_auto_toggle.
 
-async function dnsAutoStart() {
-    dnsAutoStop();
-    if (!sessionId) return;
-
-    // Wait for config (or fall back to defaults if it fails)
-    await loadAppConfig();
-
-    dnsAutoActive = true;
-    dnsAutoAttempts = 0;
-
-    const toggle = document.getElementById('dnsAutoToggle');
-    if (toggle) toggle.checked = true;
-    updateDnsAutoIndicator('Auto-check: waiting for first tick...', 'orange');
-
-    log('DNS auto-check enabled (every ' + (DNS_AUTO_CONFIG.interval_ms / 1000) + 's)');
-    dnsAutoScheduleNext(DNS_AUTO_CONFIG.start_delay_ms);
-}
-
-function dnsAutoStop(reason) {
-    if (dnsAutoTimer) {
-        clearTimeout(dnsAutoTimer);
-        dnsAutoTimer = null;
-    }
-    const wasActive = dnsAutoActive;
-    dnsAutoActive = false;
-
-    const toggle = document.getElementById('dnsAutoToggle');
-    if (toggle) toggle.checked = false;
-
-    if (wasActive) {
-        updateDnsAutoIndicator(
-            reason ? 'Auto-check stopped: ' + reason : 'Auto-check off',
-            'orange');
-        if (reason) log('DNS auto-check stopped: ' + reason);
-    }
-}
-
-function dnsAutoScheduleNext(delay) {
-    if (dnsAutoTimer) clearTimeout(dnsAutoTimer);
-    dnsAutoTimer = setTimeout(dnsAutoTick, delay);
-}
-
-async function dnsAutoTick() {
-    if (!dnsAutoActive || !sessionId) return;
-
-    dnsAutoAttempts += 1;
-
-    if (dnsAutoAttempts > DNS_AUTO_CONFIG.max_attempts) {
-        dnsAutoStop('max attempts reached (' + DNS_AUTO_CONFIG.max_attempts + ')');
-        return;
-    }
-
-    updateDnsAutoIndicator(
-        'Auto-check: attempt ' + dnsAutoAttempts + '/' + DNS_AUTO_CONFIG.max_attempts + '...',
-        'orange');
-
-    try {
-        const res = await fetch('/api/check', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({session_id: sessionId})
-        });
-        const data = await res.json();
-
-        if (data.success) {
-            setStatus('dnsStatus',
-                'All records found! You can now issue the certificate.', 'green');
-            const issueBtn = document.getElementById('btnIssue');
-            if (issueBtn) issueBtn.disabled = false;
-            log('DNS records successfully propagated (auto).');
-            dnsAutoStop('success');
-            return;
-        }
-
-        setStatus('dnsStatus', data.message || 'Waiting for DNS propagation...', 'orange');
-        log('Auto-check #' + dnsAutoAttempts + ': ' + (data.message || 'not yet'));
-
-        if (data.message && /not found|not restored|expired/i.test(data.message)) {
-            dnsAutoStop('session lost');
-            return;
-        }
-
-        dnsAutoScheduleNext(DNS_AUTO_CONFIG.interval_ms);
-    } catch (e) {
-        log('Auto-check error: ' + e.message);
-        dnsAutoScheduleNext(DNS_AUTO_CONFIG.interval_ms);
-    }
-}
+let autoCheckPollTimer = null;
+let _autoCheckSessionId = null;
 
 function updateDnsAutoIndicator(text, cls) {
     const el = document.getElementById('dnsAutoStatus');
@@ -145,9 +59,109 @@ function updateDnsAutoIndicator(text, cls) {
     el.className = 'status ' + (cls || '');
 }
 
+function startAutoCheckPolling(sid) {
+    stopAutoCheckPolling();
+    _autoCheckSessionId = sid;
+    if (!sid) return;
+
+    const tick = async () => {
+        if (_autoCheckSessionId !== sid) return; // session changed
+        try {
+            const res = await fetch('/api/check_status', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({session_id: sid})
+            });
+            if (!res.ok) return;
+            const data = await res.json();
+            if (!data.success) return;
+
+            const status = data.status || 'unknown';
+            const attempts = data.attempts || 0;
+            const max = data.max_attempts || DNS_AUTO_CONFIG.max_attempts;
+            const intervalSec = Math.round((data.interval_ms || DNS_AUTO_CONFIG.interval_ms) / 1000);
+
+            const toggle = document.getElementById('dnsAutoToggle');
+            if (toggle) toggle.checked = (status === 'pending');
+
+            if (status === 'pending') {
+                updateDnsAutoIndicator(
+                    `Server auto-check: attempt ${attempts}/${max} (every ${intervalSec}s)`,
+                    'orange'
+                );
+                if (data.last_message) {
+                    setStatus('dnsStatus', data.last_message, 'orange');
+                }
+            } else if (status === 'verified') {
+                updateDnsAutoIndicator(
+                    `Auto-check: verified after ${attempts} attempt(s)`, 'green');
+                setStatus('dnsStatus',
+                    'All records found! You can now issue the certificate.', 'green');
+                const issueBtn = document.getElementById('btnIssue');
+                if (issueBtn) issueBtn.disabled = false;
+                stopAutoCheckPolling();
+            } else if (status === 'failed') {
+                updateDnsAutoIndicator(
+                    `Auto-check: failed — ${data.last_message || 'max attempts'}`,
+                    'red');
+                setStatus('dnsStatus',
+                    data.last_message || 'Max attempts reached', 'red');
+                stopAutoCheckPolling();
+            } else if (status === 'stopped') {
+                updateDnsAutoIndicator('Auto-check: stopped', 'orange');
+                stopAutoCheckPolling();
+            } else if (status === 'expired') {
+                updateDnsAutoIndicator('Auto-check: session expired', 'red');
+                setStatus('dnsStatus',
+                    'Session is too old. Please create a new request.', 'red');
+                stopAutoCheckPolling();
+            } else {
+                updateDnsAutoIndicator('Auto-check: ' + status, 'orange');
+            }
+        } catch (e) {
+            console.warn('[autocheck] poll failed:', e);
+        }
+    };
+
+    tick(); // immediate first tick
+    autoCheckPollTimer = setInterval(tick, 3000);
+}
+
+function stopAutoCheckPolling() {
+    if (autoCheckPollTimer) {
+        clearInterval(autoCheckPollTimer);
+        autoCheckPollTimer = null;
+    }
+    _autoCheckSessionId = null;
+}
+
 function onDnsAutoToggle(checkbox) {
-    if (checkbox.checked) dnsAutoStart();
-    else dnsAutoStop('toggled off by user');
+    if (!sessionId) {
+        checkbox.checked = false;
+        return;
+    }
+    const enabled = checkbox.checked;
+
+    fetch('/api/check_auto_toggle', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({session_id: sessionId, enabled})
+    }).then(r => r.json()).then(data => {
+        if (!data.success) {
+            checkbox.checked = !enabled;
+            showNotification(data.error || 'Toggle failed', 'error');
+            return;
+        }
+        if (enabled) {
+            startAutoCheckPolling(sessionId);
+        } else {
+            updateDnsAutoIndicator('Auto-check: stopped', 'orange');
+            stopAutoCheckPolling();
+        }
+    }).catch(e => {
+        checkbox.checked = !enabled;
+        showNotification('Toggle failed: ' + e.message, 'error');
+    });
 }
 
 /* ============ Issue: sessions list ============ */
@@ -278,8 +292,9 @@ async function restoreSession(id) {
             if (checkBtn) checkBtn.disabled = false;
             if (issueBtn) issueBtn.disabled = true;
             setStatus('dnsStatus',
-                'Session restored. Click "Check DNS" to continue.', 'green');
-            dnsAutoStart();
+                'Session restored. Click "Check DNS" or wait for server auto-check.',
+                'green');
+            startAutoCheckPolling(sessionId);
         } else {
             if (checkBtn) checkBtn.disabled = true;
             if (issueBtn) issueBtn.disabled = true;
@@ -287,7 +302,8 @@ async function restoreSession(id) {
                 'Session metadata was restored, but the ACME client could not be ' +
                 'recovered (server restart). Please create a new request.',
                 'red');
-            dnsAutoStop();
+            stopAutoCheckPolling();
+            updateDnsAutoIndicator('Auto-check: client unavailable', 'red');
         }
 
         log('Restored session ' + sessionId);
@@ -312,7 +328,7 @@ async function deleteSavedSession(id) {
             sessionId = null;
             rememberSession(null);
             _setUrlSession(null);
-            dnsAutoStop('session deleted');
+            stopAutoCheckPolling();
         }
         loadSavedSessions();
     } catch (e) {
@@ -367,6 +383,7 @@ async function createRequest() {
 
         setStatus('dnsStatus', 'Records received. Add them to DNS.', 'orange');
         log('Tokens received. Add the TXT records and click "Check DNS".');
+        log('Server auto-check started in the background.');
 
         setTimeout(() => {
             const step2 = document.getElementById('step2');
@@ -374,7 +391,7 @@ async function createRequest() {
         }, 100);
 
         loadSavedSessions();
-        dnsAutoStart();
+        startAutoCheckPolling(sessionId);
     } catch (e) {
         setStatus('dnsStatus', 'Error: ' + e.message, 'red');
         log('Error: ' + e.message);
@@ -402,7 +419,7 @@ async function checkDNS() {
                 'All records found! You can now issue the certificate.', 'green');
             document.getElementById('btnIssue').disabled = false;
             log('DNS records successfully propagated.');
-            dnsAutoStop('manual check succeeded');
+            stopAutoCheckPolling();
             btn.disabled = false;
         } else {
             setStatus('dnsStatus', data.message || 'Check failed', 'red');
@@ -442,7 +459,7 @@ async function issueCert() {
 
         setStatus('issueStatus', 'Done! Copy the three parts into your panel.', 'green');
         log('Certificate issued.');
-        dnsAutoStop('certificate issued');
+        stopAutoCheckPolling();
         rememberSession(null);
         _setUrlSession(null);
         sessionId = null;

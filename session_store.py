@@ -17,17 +17,11 @@ def _path(session_id):
 
 def save_session(session_id, session):
     """Persist serializable session metadata + client state to JSON."""
-    meta = {
-        "session_id": session_id,
-        "domains": session.get("domains") or [],
-        "tokens": session.get("tokens") or {},
-        "created_at": session.get("created_at"),
-        "status": session.get("status", "pending"),
-        "client_state": session.get("client_state"),
-    }
+    serializable = {k: v for k, v in session.items() if k != "client"}
+    serializable["session_id"] = session_id
     try:
         with _path(session_id).open("w", encoding="utf-8") as f:
-            json.dump(meta, f, indent=2, default=str)
+            json.dump(serializable, f, indent=2, default=str)
         logger.info("[session_store] saved %s", session_id)
     except Exception as e:
         logger.error("[session_store] cannot write %s: %s", session_id, e)
@@ -46,27 +40,17 @@ def load_session(session_id):
 
 
 def delete_session(session_id):
-    p = _path(session_id)
-    try:
-        if p.exists():
-            p.unlink()
-            logger.info("[session_store] removed %s", p)
-        legacy = p.with_suffix(".pickle")
-        if legacy.exists():
-            legacy.unlink()
-            logger.info("[session_store] removed legacy %s", legacy)
-    except Exception as e:
-        logger.warning("[session_store] cannot remove %s: %s", p, e)
+    for suffix in (".json", ".pickle", ".lock"):
+        path = SESSIONS_DIR / f"{session_id}{suffix}"
+        try:
+            if path.exists():
+                path.unlink()
+                logger.info("[session_store] removed %s", path)
+        except Exception as e:
+            logger.warning("[session_store] cannot remove %s: %s", path, e)
 
 
 def list_metadata():
-    """
-    Return metadata for all persisted sessions, newest first.
-
-    `has_client` is True only when we have both an account file on disk
-    and a saved private key, i.e. `_client_from_state` can actually rebuild
-    the ACMEClient.
-    """
     metas = []
     for p in SESSIONS_DIR.glob("*.json"):
         try:
@@ -75,6 +59,9 @@ def list_metadata():
         except Exception as e:
             logger.warning("[session_store] cannot read %s: %s", p, e)
             continue
+
+        # Older session files may lack `session_id` - use the filename stem.
+        meta.setdefault("session_id", p.stem)
 
         state = meta.get("client_state") or {}
         account_file = state.get("account_file")

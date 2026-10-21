@@ -64,9 +64,9 @@
         </table>
         <button id="btnCheck" onclick="checkDNS()">Check DNS</button>
 
-        <label class="inline-checkbox" title="Automatically poll DNS every 30 seconds until records propagate">
+        <label class="inline-checkbox" title="Server-side auto-check runs in the background until DNS propagates">
             <input type="checkbox" id="dnsAutoToggle" onchange="onDnsAutoToggle(this)">
-            <span>Auto-check every 30s</span>
+            <span>Auto-check DNS (server-side)</span>
         </label>
 
         <div class="status" id="dnsStatus"></div>

@@ -4,6 +4,7 @@ import uuid
 import base64
 import logging
 from flask import Flask, request, jsonify, render_template
+from datetime import datetime, timezone
 from acme_manager import ACMEManager
 from converter import parse_anything, serialize_bundle, bundle_summary, PKCS12_TARGETS
 from globalsign_catalog import grouped_catalog
@@ -120,6 +121,15 @@ def api_check():
         })
 
     success, message = manager.check_dns(session_id)
+
+    if success:
+        import session_store
+        sess = session_store.load_session(session_id)
+        if sess and sess.get("auto_check_status") == "pending":
+            sess["auto_check_status"] = "verified"
+            sess["auto_check_last_message"] = message
+            session_store.save_session(session_id, sess)
+
     logger.info("[api/check] success=%s message=%s", success, message)
     return jsonify({"success": success, "message": message})
 
@@ -163,6 +173,76 @@ def api_issue():
     except Exception as e:
         logger.exception("[api/issue] failed: %s", e)
         return jsonify({"error": str(e)}), 500
+
+
+# ---------------------------------------------------------------------------
+# Routes - DNS auto-check status
+# ---------------------------------------------------------------------------
+
+@app.route("/api/check_status", methods=["POST"])
+def api_check_status():
+    data = request.get_json(silent=True) or {}
+    session_id = data.get("session_id")
+    if not session_id:
+        return jsonify({"error": "Missing session_id"}), 400
+
+    import session_store
+    session = session_store.load_session(session_id)
+    if not session:
+        return jsonify({"success": False, "error": "Session not found"}), 404
+
+    return jsonify({
+        "success": True,
+        "session_id": session_id,
+        "status": session.get("auto_check_status", "unknown"),
+        "attempts": int(session.get("auto_check_attempts", 0)),
+        "max_attempts": int(os.getenv("DNS_AUTO_MAX_ATTEMPTS", "240")),
+        "interval_ms": int(os.getenv("DNS_AUTO_INTERVAL_MS", "30000")),
+        "started_at": session.get("auto_check_started_at"),
+        "last_at": session.get("auto_check_last_at"),
+        "last_message": session.get("auto_check_last_message"),
+    })
+
+
+@app.route("/api/check_auto_toggle", methods=["POST"])
+def api_check_auto_toggle():
+    data = request.get_json(silent=True) or {}
+    session_id = data.get("session_id")
+    enabled = bool(data.get("enabled", True))
+    if not session_id:
+        return jsonify({"error": "Missing session_id"}), 400
+
+    import session_store
+    session = session_store.load_session(session_id)
+    if not session:
+        return jsonify({"success": False, "error": "Session not found"}), 404
+
+    prev = session.get("auto_check_status")
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    if enabled:
+        if prev == "verified":
+            return jsonify({
+                "success": False,
+                "error": "Auto-check already verified",
+            }), 400
+        if prev in ("failed", "stopped", "expired"):
+            session["auto_check_attempts"] = 0
+            session["auto_check_started_at"] = now_iso
+            session["auto_check_last_at"] = None
+        session["auto_check_status"] = "pending"
+        if not session.get("auto_check_started_at"):
+            session["auto_check_started_at"] = now_iso
+    else:
+        if prev == "pending":
+            session["auto_check_status"] = "stopped"
+
+    session_store.save_session(session_id, session)
+    return jsonify({
+        "success": True,
+        "status": session.get("auto_check_status"),
+        "attempts": int(session.get("auto_check_attempts", 0)),
+    })
 
 
 # ---------------------------------------------------------------------------

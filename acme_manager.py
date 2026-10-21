@@ -1,5 +1,7 @@
 import os
 import logging
+import time
+import threading
 from datetime import datetime, timezone
 from dotenv import load_dotenv
 from cryptography.hazmat.primitives import serialization
@@ -8,6 +10,12 @@ from cryptography import x509
 from simple_acme_dns import ACMEClient
 from dns_check import resolve_txt_records
 import session_store
+
+try:
+    import fcntl
+    HAS_FCNTL = True
+except ImportError:
+    HAS_FCNTL = False
 
 load_dotenv()
 
@@ -146,9 +154,161 @@ def _client_from_state(state):
 class ACMEManager:
     def __init__(self):
         self.sessions = {}
+        self._scheduler_stop = threading.Event()
+        self._scheduler_thread = None
         self._load_persisted_sessions()
         self._hydrate_sessions()
         logger.info("[init] loaded %d persisted session(s)", len(self.sessions))
+        self._start_scheduler()
+
+    def _start_scheduler(self):
+        if self._scheduler_thread and self._scheduler_thread.is_alive():
+            return
+        self._scheduler_thread = threading.Thread(
+            target=self._scheduler_loop,
+            daemon=True,
+            name="dns-autocheck-scheduler",
+        )
+        self._scheduler_thread.start()
+        logger.info("[scheduler] started")
+
+    def _scheduler_loop(self):
+        while not self._scheduler_stop.is_set():
+            try:
+                self._tick_all_sessions()
+            except Exception as e:
+                logger.exception("[scheduler] tick failed: %s", e)
+            self._scheduler_stop.wait(3)  # 3 seconds
+
+    def _tick_all_sessions(self):
+        for meta in session_store.list_metadata():
+            sid = meta.get("session_id")
+            if not sid:
+                continue
+            try:
+                self._maybe_run_auto_check(sid)
+            except Exception as e:
+                logger.warning("[scheduler] %s: %s", sid, e)
+
+    def _maybe_run_auto_check(self, session_id):
+        session = session_store.load_session(session_id)
+        if not session:
+            return
+        if session.get("auto_check_status") != "pending":
+            return
+
+        now = time.time()
+
+        def _parse(iso):
+            if not iso:
+                return None
+            try:
+                return datetime.fromisoformat(iso).timestamp()
+            except Exception:
+                return None
+
+        attempts = int(session.get("auto_check_attempts", 0))
+        max_attempts = int(os.getenv("DNS_AUTO_MAX_ATTEMPTS", "240"))
+        interval_ms = int(os.getenv("DNS_AUTO_INTERVAL_MS", "30000"))
+        start_delay_ms = int(os.getenv("DNS_AUTO_START_DELAY_MS", "3000"))
+
+        started_ts = _parse(session.get("auto_check_started_at")) or now
+        last_ts = _parse(session.get("auto_check_last_at")) or 0
+
+        if attempts == 0:
+            next_at = started_ts + start_delay_ms / 1000.0
+        else:
+            next_at = last_ts + interval_ms / 1000.0
+
+        if now < next_at:
+            return
+
+        # Hard timeout: don't keep checking zombie sessions forever
+        if now - started_ts > 7 * 86400:
+            session["auto_check_status"] = "expired"
+            session["auto_check_last_message"] = "Session older than 7 days"
+            session_store.save_session(session_id, session)
+            return
+
+        if attempts >= max_attempts:
+            session["auto_check_status"] = "failed"
+            session["auto_check_last_message"] = (
+                f"Max attempts ({max_attempts}) reached"
+            )
+            session_store.save_session(session_id, session)
+            return
+
+        lock_path = session_store.SESSIONS_DIR / f"{session_id}.lock"
+        try:
+            lock_fd = open(lock_path, "w")
+        except Exception as e:
+            logger.warning("[autocheck] cannot open lock for %s: %s", session_id, e)
+            return
+
+        try:
+            if HAS_FCNTL:
+                try:
+                    fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except (IOError, OSError):
+                    return
+
+            try:
+                # Re-read inside lock - state may have changed
+                session = session_store.load_session(session_id)
+                if not session or session.get("auto_check_status") != "pending":
+                    return
+
+                attempts = int(session.get("auto_check_attempts", 0)) + 1
+                session["auto_check_attempts"] = attempts
+                session["auto_check_last_at"] = datetime.now(timezone.utc).isoformat()
+
+                tokens = session.get("tokens") or {}
+                ok = True
+                message = "All TXT records verified via public DNS"
+                for fqdn, expected_values in tokens.items():
+                    found, err = resolve_txt_records(fqdn)
+                    if err:
+                        ok, message = False, f"DNS lookup failed for {fqdn}: {err}"
+                        break
+                    if not found:
+                        ok, message = False, f"TXT record not published yet: {fqdn}"
+                        break
+                    for expected in expected_values:
+                        if expected not in found:
+                            ok, message = False, f"TXT mismatch for {fqdn}"
+                            break
+                    if not ok:
+                        break
+
+                session["auto_check_last_message"] = message
+
+                if ok:
+                    session["auto_check_status"] = "verified"
+                elif attempts >= max_attempts:
+                    session["auto_check_status"] = "failed"
+                    session["auto_check_last_message"] = (
+                        f"Max attempts ({max_attempts}) reached. Last: {message}"
+                    )
+
+                # Don't resurrect a session that was deleted during our check
+                if (session_store.SESSIONS_DIR / f"{session_id}.json").exists():
+                    session_store.save_session(session_id, session)
+
+                logger.info(
+                    "[autocheck] %s attempt %d/%d ok=%s msg=%s",
+                    session_id, attempts, max_attempts, ok, message,
+                )
+            finally:
+                if HAS_FCNTL:
+                    try:
+                        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                    except Exception:
+                        pass
+        finally:
+            try:
+                lock_fd.close()
+            except Exception:
+                pass
 
     def _load_persisted_sessions(self):
         for meta in session_store.list_metadata():
@@ -217,6 +377,7 @@ class ACMEManager:
         logger.info("[create] requesting verification tokens")
         tokens = client.request_verification_tokens()
         logger.info("[create] got tokens: %s", tokens)
+        now_iso = datetime.now(timezone.utc).isoformat()
 
         session = {
             "client": client,
@@ -225,6 +386,11 @@ class ACMEManager:
             "created_at": datetime.now(timezone.utc).isoformat(),
             "status": "pending",
             "client_state": _client_to_state(client, session_id),
+            "auto_check_status": "pending",
+            "auto_check_attempts": 0,
+            "auto_check_started_at": now_iso,
+            "auto_check_last_at": None,
+            "auto_check_last_message": None,
         }
         self.sessions[session_id] = session
         session_store.save_session(session_id, session)

@@ -34,7 +34,18 @@
 })();
 
 window.addEventListener('beforeunload', () => {
-    if (typeof dnsAutoActive !== 'undefined' && dnsAutoActive) {
-        dnsAutoStop('page unload');
+    if (typeof stopAutoCheckPolling === 'function') stopAutoCheckPolling();
+});
+window.addEventListener('pagehide', () => {
+    if (typeof stopAutoCheckPolling === 'function') stopAutoCheckPolling();
+});
+
+// Pause polling when the tab is hidden; resume when it comes back
+document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+        if (typeof stopAutoCheckPolling === 'function') stopAutoCheckPolling();
+    } else if (typeof sessionId !== 'undefined' && sessionId
+            && typeof startAutoCheckPolling === 'function') {
+        startAutoCheckPolling(sessionId);
     }
 });
