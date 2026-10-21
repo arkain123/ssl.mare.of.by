@@ -229,7 +229,6 @@ function copyLivePem(which) {
         .catch(e => showNotification('Copy failed: ' + e, 'error'));
 }
 
-/* Download an "unused" certificate PEM if the backend provided it */
 function downloadUnusedPem(index) {
     const chain = window._lastVerifyChain || {};
     const unused = chain.unused || [];
@@ -286,19 +285,72 @@ function renderVerifyResult(data, targetId) {
 
     html += '</div>';
 
-    /* ---- Unused certificates (secondary row, dimmed) ---- */
+    /* ---- Group unused certs by relationship ---- */
     if (chain.unused && chain.unused.length) {
-        html += '<div style="margin-top:16px; padding-top:12px; border-top:1px dashed var(--border);">';
-        html += '<div style="font-size:12px; color:var(--muted); margin-bottom:8px;">';
-        html += 'Not part of the main verification path (e.g. cross-signed variants):';
-        html += '</div>';
-        html += '<div class="chain-viz" style="opacity:0.65;">';
-        chain.unused.forEach((u, i) => {
-            if (i > 0) html += '<div class="chain-arrow none">·</div>';
-            const cls = (u.self_signed ? 'root ' : '') + 'unknown';
-            html += chainNode('Unused', u.subject || u.subject_cn || '—', cls);
+        const crossSigned = [];
+        const siblings = [];
+        const unrelated = [];
+
+        chain.unused.forEach((u, index) => {
+            if (!u.related_to) {
+                unrelated.push({ u, index });
+            } else if (u.relationship === 'sibling') {
+                siblings.push({ u, index });
+            } else {
+                crossSigned.push({ u, index });
+            }
         });
-        html += '</div></div>';
+
+        if (crossSigned.length) {
+            html += '<div style="margin-top:16px; padding-top:12px; border-top:1px dashed var(--border);">';
+            html += '<div style="font-size:12px; color:var(--muted); margin-bottom:8px;">';
+            html += 'Cross-signed alternatives (same subject + key, different root):';
+            html += '</div>';
+            crossSigned.forEach(({ u, index }) => {
+                html += '<div style="display:flex; align-items:center; gap:8px; margin:6px 0; flex-wrap:wrap;">';
+                html += chainNode('Node', u.related_to, 'ok');
+                html += '<div class="chain-arrow none" style="font-size:18px;">⇢</div>';
+                html += chainNode('Unused', u.subject, 'unknown');
+                html += '<span class="muted" style="font-size:11px;">alternative issuer</span>';
+                if (u.pem) {
+                    html += `<button type="button" class="small" onclick="downloadUnusedPem(${index})">download</button>`;
+                }
+                html += '</div>';
+            });
+            html += '</div>';
+        }
+
+        if (siblings.length) {
+            html += '<div style="margin-top:12px; padding-top:8px; border-top:1px dashed var(--border);">';
+            html += '<div style="font-size:12px; color:var(--muted); margin-bottom:8px;">';
+            html += 'Sibling CAs (same issuer as a chain node, but a distinct intermediate):';
+            html += '</div>';
+            siblings.forEach(({ u, index }) => {
+                html += '<div style="display:flex; align-items:center; gap:8px; margin:6px 0; flex-wrap:wrap; opacity:0.85;">';
+                html += chainNode('Node', u.related_to, 'ok');
+                html += '<div class="chain-arrow none" style="font-size:18px;">⇢</div>';
+                html += chainNode('Unused', u.subject, 'unknown');
+                html += `<span class="muted" style="font-size:11px;">same issuer (${escapeHtml(u.issuer)})</span>`;
+                if (u.pem) {
+                    html += `<button type="button" class="small" onclick="downloadUnusedPem(${index})">download</button>`;
+                }
+                html += '</div>';
+            });
+            html += '</div>';
+        }
+
+        if (unrelated.length) {
+            html += '<div style="margin-top:12px; padding-top:8px; border-top:1px dashed var(--border);">';
+            html += '<div style="font-size:12px; color:var(--muted); margin-bottom:8px;">';
+            html += 'Unrelated certificates (no connection to the main chain):';
+            html += '</div>';
+            html += '<div class="chain-viz" style="opacity:0.6; justify-content:flex-start; gap:6px;">';
+            unrelated.forEach(({ u }, j) => {
+                if (j > 0) html += '<div class="chain-arrow none">·</div>';
+                html += chainNode('Unused', u.subject, 'unknown');
+            });
+            html += '</div></div>';
+        }
     }
 
     html += '</div>';
@@ -419,26 +471,35 @@ function renderVerifyResult(data, targetId) {
 
         if (chain.unused && chain.unused.length) {
             html += '<h3>Unused certificates</h3>';
-            html += '<p class="hint">Provided, but not part of the main verification path. '
-                 + 'Usually cross-signed variants of the same intermediate.</p>';
+            html += '<p class="hint">Provided, but not part of the main verification path.</p>';
             html += '<table>';
             html += '<thead><tr>'
                  + '<th>Subject</th>'
                  + '<th>Issuer</th>'
                  + '<th>Self-signed</th>'
+                 + '<th>Relationship</th>'
                  + '<th></th>'
                  + '</tr></thead><tbody>';
             chain.unused.forEach((u, i) => {
                 const selfSigned = u.self_signed
                     ? '<span class="tag-ok">yes</span>'
                     : '<span class="muted">no</span>';
+                let rel;
+                if (!u.related_to) {
+                    rel = '<span class="muted">— (unrelated)</span>';
+                } else if (u.relationship === 'sibling') {
+                    rel = `sibling of <b>${escapeHtml(u.related_to)}</b>`;
+                } else {
+                    rel = `alternative issuer of <b>${escapeHtml(u.related_to)}</b>`;
+                }
                 const dl = u.pem
                     ? `<button type="button" class="small" onclick="downloadUnusedPem(${i})">download</button>`
                     : '';
-                html += `<tr style="opacity:0.75;">
-                    <td>${escapeHtml(u.subject || u.subject_cn || '—')}</td>
-                    <td>${escapeHtml(u.issuer || u.issuer_cn || '—')}</td>
+                html += `<tr style="opacity:0.8;">
+                    <td>${escapeHtml(u.subject || '—')}</td>
+                    <td>${escapeHtml(u.issuer || '—')}</td>
                     <td>${selfSigned}</td>
+                    <td>${rel}</td>
                     <td>${dl}</td>
                 </tr>`;
             });
@@ -453,9 +514,11 @@ function renderVerifyResult(data, targetId) {
 }
 
 function row(label, value) { return rowHtml(label, escapeHtml(value)); }
+
 function rowHtml(label, htmlValue) {
     return `<tr><td>${escapeHtml(label)}</td><td>${htmlValue}</td></tr>`;
 }
+
 function chainNode(label, name, cls, unknown) {
     const classes = 'chain-node ' + (cls || '') + (unknown ? ' unknown' : '');
     const nameHtml = name ? `<div class="chain-node-name">${escapeHtml(name)}</div>` : '';

@@ -152,6 +152,35 @@ def _is_self_signed(cert):
     return _verify_issued_by(cert, cert)
 
 
+def _find_related_chain_node(unused_cert, leaf, ordered):
+    """
+    Two kinds of relationship are recognised:
+
+      1. "cross_signed" - the unused cert can act as issuer of some node
+         in the main chain. This is the classic cross-signed case: same
+         subject + public key, different issuer.
+
+      2. "sibling" - the unused cert was issued by the same authority as
+         some node in the main chain, but is a distinct CA (different
+         subject). E.g. both R46-AlphaSSL and R46-DV-TLS are signed by
+         'GlobalSign Root R46'.
+    """
+    chain_nodes = [leaf] + list(ordered)
+
+    # 1. Cross-signed: unused cert could have signed a chain node
+    for node in chain_nodes:
+        if _verify_issued_by(node, unused_cert):
+            return _short_name(node.subject), "cross_signed"
+
+    # 2. Sibling: same issuer as some node's issuer
+    for node in chain_nodes:
+        if (unused_cert.issuer == node.issuer
+                and unused_cert.subject != node.subject):
+            return _short_name(node.subject), "sibling"
+
+    return None, None
+
+
 def _verify_issued_by(child, issuer):
     if hasattr(child, "verify_directly_issued_by"):
         try:
@@ -304,6 +333,19 @@ def verify_inputs(cert_pem, chain_pem, key_pem):
                     "ok": link["verified"],
                 })
 
+            unused_entries = []
+            for c in unused:
+                related_to, relationship = _find_related_chain_node(c, leaf, ordered)
+                unused_entries.append({
+                    "subject": _short_name(c.subject),
+                    "issuer": _short_name(c.issuer),
+                    "is_ca": _is_ca(c),
+                    "self_signed": c.subject == c.issuer,
+                    "pem": _cert_to_pem(c),
+                    "related_to": related_to,
+                    "relationship": relationship,
+                })
+
             result["chain"] = {
                 "length": len(ordered),
                 "links": links,
@@ -325,16 +367,7 @@ def verify_inputs(cert_pem, chain_pem, key_pem):
                 "has_self_signed_root": complete,
                 "extra_count": len(unused),
                 "provided_count": len(chain_certs),
-                "unused": [
-                {
-                    "subject": _short_name(c.subject),
-                    "issuer": _short_name(c.issuer),
-                    "is_ca": _is_ca(c),
-                    "self_signed": c.subject == c.issuer,
-                    "pem": _cert_to_pem(c),
-                }
-                for c in unused
-            ],
+                "unused": unused_entries,
             }
 
             for i, link in enumerate(links):

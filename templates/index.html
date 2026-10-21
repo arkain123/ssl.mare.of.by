@@ -143,20 +143,21 @@
         <textarea id="vKey" rows="6" placeholder="-----BEGIN ... PRIVATE KEY----- ..."></textarea>
 
         <br>
-        <button id="btnVerify" onclick="runVerify()">Verify</button>
-        <button id="btnBuildChain" onclick="buildChain()">Build chain</button>
-        <label class="inline-checkbox" title="Append the self-signed root certificate to the chain">
-            <input type="checkbox" id="includeRoot">
-            <span>Include self-signed root</span>
-        </label>
-        <button type="button" onclick="clearVerify()">Clear</button>
-        <div class="status" id="verifyStatus"></div>
-
-        <div id="chainResult" class="step" style="display:none; margin-top:16px;">
-            <h2>Built chain</h2>
-            <div id="chainResultContent"></div>
+        <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:8px;">
+            <button id="btnVerify" onclick="runVerify()">Verify</button>
+            <button id="btnBuildChain" onclick="buildChain()">Build chain</button>
+            <label class="inline-checkbox" style="margin-left:0;" title="Append the self-signed root certificate to the chain">
+                <input type="checkbox" id="includeRoot">
+                <span>Include self-signed root</span>
+            </label>
+            <button type="button" onclick="clearVerify()">Clear</button>
         </div>
+        <div class="status" id="verifyStatus"></div>
+    </div>
 
+    <div id="chainResult" class="step" style="display:none; margin-top:16px;">
+        <h2>Built chain</h2>
+        <div id="chainResultContent"></div>
     </div>
 
     <div id="verifyResult" style="display:none;"></div>
