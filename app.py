@@ -49,6 +49,11 @@ def _is_text_content(name: str, content: bytes) -> bool:
 # Routes - UI
 # ---------------------------------------------------------------------------
 
+@app.route("/favicon.ico")
+def favicon():
+    return app.send_static_file("icons/favicon.ico")
+
+
 @app.route("/")
 def index():
     logger.info("[http] GET / from %s", request.remote_addr)
