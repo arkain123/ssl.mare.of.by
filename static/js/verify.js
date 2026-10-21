@@ -229,17 +229,35 @@ function copyLivePem(which) {
         .catch(e => showNotification('Copy failed: ' + e, 'error'));
 }
 
+/* Download an "unused" certificate PEM if the backend provided it */
+function downloadUnusedPem(index) {
+    const chain = window._lastVerifyChain || {};
+    const unused = chain.unused || [];
+    const item = unused[index];
+    if (!item || !item.pem) {
+        showNotification('PEM not available for this certificate', 'error');
+        return;
+    }
+    const filename = (item.subject || 'unused')
+        .replace(/[^a-z0-9._-]/gi, '_')
+        .toLowerCase() + '.pem';
+    const blob = new Blob([item.pem], {type: 'application/x-pem-file'});
+    downloadBlob(blob, filename);
+}
+
 function renderVerifyResult(data, targetId) {
     const el = document.getElementById(targetId || 'verifyResult');
     if (!el) return;
 
     if (data.chain_pem) _lastLiveChainPem = data.chain_pem;
+    window._lastVerifyChain = data.chain || {};
 
     const c = data.certificate;
     const chain = data.chain || {};
 
     let html = '';
 
+    /* ---- Main chain visualization ---- */
     html += '<div class="step"><h2>Chain</h2>';
     html += '<div class="chain-viz">';
 
@@ -266,8 +284,26 @@ function renderVerifyResult(data, targetId) {
         html += chainNode('Intermediate', 'not provided', 'unknown', true);
     }
 
-    html += '</div></div>';
+    html += '</div>';
 
+    /* ---- Unused certificates (secondary row, dimmed) ---- */
+    if (chain.unused && chain.unused.length) {
+        html += '<div style="margin-top:16px; padding-top:12px; border-top:1px dashed var(--border);">';
+        html += '<div style="font-size:12px; color:var(--muted); margin-bottom:8px;">';
+        html += 'Not part of the main verification path (e.g. cross-signed variants):';
+        html += '</div>';
+        html += '<div class="chain-viz" style="opacity:0.65;">';
+        chain.unused.forEach((u, i) => {
+            if (i > 0) html += '<div class="chain-arrow none">·</div>';
+            const cls = (u.self_signed ? 'root ' : '') + 'unknown';
+            html += chainNode('Unused', u.subject || u.subject_cn || '—', cls);
+        });
+        html += '</div></div>';
+    }
+
+    html += '</div>';
+
+    /* ---- Errors / warnings ---- */
     if ((data.errors && data.errors.length) || (data.warnings && data.warnings.length)) {
         html += '<div class="step"><h2>Issues</h2><ul class="err-list">';
         (data.errors || []).forEach(e => {
@@ -279,6 +315,7 @@ function renderVerifyResult(data, targetId) {
         html += '</ul></div>';
     }
 
+    /* ---- Connection ---- */
     if (data.connection) {
         const cc = data.connection;
         html += '<div class="step verify-details"><h2>Connection</h2><table>';
@@ -312,6 +349,7 @@ function renderVerifyResult(data, targetId) {
         html += '</div>';
     }
 
+    /* ---- Details ---- */
     html += '<div class="step verify-details"><h2>Details</h2>';
 
     if (c) {
@@ -374,6 +412,34 @@ function renderVerifyResult(data, targetId) {
                     <td>${i + 1}</td>
                     <td>${escapeHtml(cc.subject)}</td>
                     <td>${escapeHtml(cc.issuer)}</td>
+                </tr>`;
+            });
+            html += '</tbody></table>';
+        }
+
+        if (chain.unused && chain.unused.length) {
+            html += '<h3>Unused certificates</h3>';
+            html += '<p class="hint">Provided, but not part of the main verification path. '
+                 + 'Usually cross-signed variants of the same intermediate.</p>';
+            html += '<table>';
+            html += '<thead><tr>'
+                 + '<th>Subject</th>'
+                 + '<th>Issuer</th>'
+                 + '<th>Self-signed</th>'
+                 + '<th></th>'
+                 + '</tr></thead><tbody>';
+            chain.unused.forEach((u, i) => {
+                const selfSigned = u.self_signed
+                    ? '<span class="tag-ok">yes</span>'
+                    : '<span class="muted">no</span>';
+                const dl = u.pem
+                    ? `<button type="button" class="small" onclick="downloadUnusedPem(${i})">download</button>`
+                    : '';
+                html += `<tr style="opacity:0.75;">
+                    <td>${escapeHtml(u.subject || u.subject_cn || '—')}</td>
+                    <td>${escapeHtml(u.issuer || u.issuer_cn || '—')}</td>
+                    <td>${selfSigned}</td>
+                    <td>${dl}</td>
                 </tr>`;
             });
             html += '</tbody></table>';

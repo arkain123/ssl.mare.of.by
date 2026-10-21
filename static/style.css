@@ -190,6 +190,10 @@ th { background: var(--table-header-bg); }
     margin: 24px 0;
     flex-wrap: wrap;
 }
+.chain-viz .chain-node.unknown {
+    opacity: 0.5;
+    border-style: dotted;
+}
 .chain-node {
     padding: 12px 18px;
     border-radius: 8px;

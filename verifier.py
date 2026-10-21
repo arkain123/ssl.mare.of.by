@@ -325,6 +325,16 @@ def verify_inputs(cert_pem, chain_pem, key_pem):
                 "has_self_signed_root": complete,
                 "extra_count": len(unused),
                 "provided_count": len(chain_certs),
+                "unused": [
+                {
+                    "subject": _short_name(c.subject),
+                    "issuer": _short_name(c.issuer),
+                    "is_ca": _is_ca(c),
+                    "self_signed": c.subject == c.issuer,
+                    "pem": _cert_to_pem(c),
+                }
+                for c in unused
+            ],
             }
 
             for i, link in enumerate(links):
