@@ -11,10 +11,21 @@ command line or remembering openssl flags.
 Obtain free Let's Encrypt certificates via the DNS-01 challenge:
 
 - enter one or more domains, including wildcards (`*.example.com`)
-- get ready-to-use TXT records for your DNS provider (click any cell to copy)
-- automatic propagation check through public DNS resolvers over TCP
-  (Google / Cloudflare / Quad9, configurable)
-- optional background auto-checker - polls every N seconds until propagated
+- get ready-to-use TXT records for your DNS provider (click the copy icon in
+  any cell to copy)
+- DNS propagation is checked over TCP through public resolvers
+  (Google / Cloudflare / Quad9, configurable) - so what you see is what a CA
+  will see
+- **server-side auto-check**: after a request is created, a background thread
+  on the server polls DNS on an interval (default 30s) until records
+  propagate, or until the attempt limit is reached (default 240 = 2 hours).
+  This runs independently of the browser - closing the tab, reloading the
+  page, or restarting gunicorn does not stop it. The attempt counter is
+  persisted per session, so reopening the page shows the real number of
+  attempts already made, not a fresh counter.
+- manual **Check DNS** button is still available at any time and takes
+  precedence; on success it also flips the auto-check state to `verified`
+- auto-check can be paused / resumed per session via a checkbox in the UI
 - resumable sessions: state persists across server restarts and can be shared
   between devices via a `?session=<uuid>` URL
 - issue and download leaf certificate, intermediate chain, and private key
@@ -68,12 +79,15 @@ Appends to the end of the existing chain - never overwrites.
 
 - dark / light / auto theme (follows `prefers-color-scheme` by default)
 - remembered across reloads via `localStorage`
+- icons are inline SVG, no external font or CDN required - works fully offline
 
 ## Stack
 
-- **Backend:** Python 3.10+, Flask, `cryptography`, `simple_acme_dns`, `dnspython`
+- **Backend:** Python 3.10+, Flask, `cryptography`, `simple_acme_dns`,
+  `dnspython`; a background thread inside the app runs the server-side
+  DNS auto-checker
 - **Frontend:** vanilla JavaScript, split into modules under `static/js/`
-  (no build step)
+  (no build step, no external dependencies)
 - **Storage:** ACME accounts, issued certificates and pending sessions stored
   on disk (`accounts/`, `certs/`, `sessions/`)
 - **Config:** environment variables loaded from a local `.env` file
@@ -132,15 +146,17 @@ NAMESERVERS=8.8.8.8,1.1.1.1,9.9.9.9
 # Per-resolver DNS query timeout, seconds
 DNS_QUERY_TIMEOUT=3
 
-# ---------- DNS auto-check (UI polling) ----------
-# Browser polling interval for auto-check, milliseconds
+# ---------- DNS auto-check (server-side) ----------
+# Interval between background DNS checks, milliseconds.
+# The server polls on this schedule for each pending session - independently
+# of whether a browser is connected.
 DNS_AUTO_INTERVAL_MS=30000
 
-# Total attempts before the auto-checker gives up
-# 240 x 30s = 2 hours
+# Total attempts before the auto-checker gives up.
+# 240 x 30s = 2 hours.
 DNS_AUTO_MAX_ATTEMPTS=240
 
-# Delay before the first auto-check tick, milliseconds
+# Delay before the first check after a session is created, milliseconds.
 DNS_AUTO_START_DELAY_MS=3000
 
 # ---------- Chain builder ----------
@@ -198,9 +214,9 @@ LOG_LEVEL=INFO
 | `ACCOUNT_EMAIL` | — | Contact email registered with the ACME account. |
 | `NAMESERVERS` | `8.8.8.8,1.1.1.1,9.9.9.9` | Resolvers for TXT checks (TCP, tried in order). |
 | `DNS_QUERY_TIMEOUT` | `3` | Per-resolver query timeout, seconds. |
-| `DNS_AUTO_INTERVAL_MS` | `30000` | Browser polling interval for auto-check. |
+| `DNS_AUTO_INTERVAL_MS` | `30000` | Interval between server-side DNS checks. Independent of the browser. |
 | `DNS_AUTO_MAX_ATTEMPTS` | `240` | Attempts before auto-check gives up. |
-| `DNS_AUTO_START_DELAY_MS` | `3000` | Delay before first auto-check tick. |
+| `DNS_AUTO_START_DELAY_MS` | `3000` | Delay before first server-side check after session creation. |
 | `CHAIN_MAX_DEPTH` | `10` | Max depth of AIA chain chasing. |
 | `AIA_FETCH_TIMEOUT` | `10` | AIA download timeout, seconds. |
 | `AIA_USER_AGENT` | `SSL-Tools-Chain-Builder/1.0` | User-Agent for AIA fetches. |
@@ -232,8 +248,9 @@ Then open `http://<FLASK_HOST>:<FLASK_PORT>` in a browser (by default,
 The UI has tabs for each task:
 
 - **Issue certificate** - enter domains, add the shown TXT records to DNS
-  (click a cell to copy), then either wait for the auto-checker or click
-  **Check DNS**, then **Get certificate**.
+  (click the copy icon in a cell to copy). The server starts checking DNS in
+  the background; you can also click **Check DNS** for an immediate manual
+  check. Once records are visible, click **Get certificate**.
 - **Verify certificate** - paste a certificate, optional chain, and optional
   private key. Use **Build chain** to construct a full chain of trust from the
   leaf alone, or inject a GlobalSign intermediate from the built-in catalog.
@@ -242,15 +259,39 @@ The UI has tabs for each task:
 - **Convert** - upload or paste a certificate file, click **Inspect** to see
   what was detected, then pick an output format and download the result.
 
+### Server-side DNS auto-check
+
+When a session is created, the backend marks it `auto_check_status: pending`
+and the scheduler picks it up:
+
+1. **First check** after `DNS_AUTO_START_DELAY_MS` (default 3s).
+2. **Subsequent checks** every `DNS_AUTO_INTERVAL_MS` (default 30s).
+3. Stops when all TXT values are visible (`verified`), when the limit
+   `DNS_AUTO_MAX_ATTEMPTS` is reached (`failed`), or when the user pauses
+   the checkbox (`stopped`).
+
+The scheduler is a background thread started when the app boots. It reads
+pending sessions from disk on each tick, so it survives browser disconnects
+and gunicorn restarts. When multiple gunicorn workers are running, a
+per-session file lock ensures only one worker actually performs each check
+- no duplicate DNS queries, no conflicting state writes.
+
+The frontend does not drive the checks anymore - it only **polls
+`/api/check_status` every 3 seconds** to display the current attempt count
+and last message. Closing the tab has zero effect on the auto-check loop.
+When you reopen the page or resume a session from another device, the UI
+immediately shows the real counter (e.g. `attempt 12/240`), not a fresh one.
+
 ### Sessions and cross-device resume
 
-Pending ACME sessions are persisted to `sessions/`. If the server restarts, or
-you want to continue from another device, the state (including the ACME account
-key and CSR) is restored from `client_state`.
+Pending ACME sessions are persisted to `sessions/`. If the server restarts,
+or you want to continue from another device, the state (including the ACME
+account key and CSR) is restored from `client_state`.
 
-After creating or restoring a session, the URL contains `?session=<uuid>`. Copy
-the URL to share a session, or use the **Share** button in the saved-requests
-list. Once a certificate is issued, the session is deleted automatically.
+After creating or restoring a session, the URL contains `?session=<uuid>`.
+Copy the URL to share a session, or use the **Share** button in the
+saved-requests list. Once a certificate is issued, the session and its lock
+file are deleted automatically.
 
 ## Convert: supported formats
 
@@ -286,7 +327,7 @@ list. Once a certificate is issued, the session is deleted automatically.
 ```
 .
 ├── app.py                    # Flask app and HTTP routes
-├── acme_manager.py           # ACME client wrapper, issuance logic
+├── acme_manager.py           # ACME client wrapper + DNS auto-check scheduler
 ├── verifier.py               # Certificate parsing, chain verification/building
 ├── converter.py              # Format detection, parsing, and serialization
 ├── dns_check.py              # TXT resolution via public resolvers (TCP)
@@ -297,8 +338,8 @@ list. Once a certificate is issued, the session is deleted automatically.
 ├── static/
 │   ├── style.css             # Theme + layout
 │   └── js/
-│       ├── core.js           # Theme, tabs, shared helpers
-│       ├── issue.js          # ACME + auto-check
+│       ├── core.js           # Theme, tabs, shared helpers, inline SVG icons
+│       ├── issue.js          # ACME + auto-check polling
 │       ├── verify.js         # Verify + build chain + live check
 │       ├── convert.js        # Convert + GlobalSign injector
 │       └── app.js            # Bootstrap
@@ -306,7 +347,7 @@ list. Once a certificate is issued, the session is deleted automatically.
 ├── .env.example              # Template for local configuration
 ├── accounts/                 # ACME account state (created at runtime)
 ├── certs/                    # Issued certificates (created at runtime)
-└── sessions/                 # Pending sessions (created at runtime)
+└── sessions/                 # Pending sessions + per-session lock files
 ```
 
 ## API
@@ -314,7 +355,9 @@ list. Once a certificate is issued, the session is deleted automatically.
 | Method | Endpoint | Purpose |
 |---|---|---|
 | POST | `/api/create` | Start an ACME order, return TXT records |
-| POST | `/api/check` | Verify DNS propagation for a session |
+| POST | `/api/check` | Manual DNS propagation check for a session |
+| POST | `/api/check_status` | Return server-side auto-check status for a session |
+| POST | `/api/check_auto_toggle` | Enable or pause auto-check for a session |
 | POST | `/api/issue` | Issue the certificate |
 | GET | `/api/sessions` | List saved sessions |
 | GET | `/api/sessions/<id>` | Load one session (rebuilds ACME client if possible) |
@@ -327,9 +370,62 @@ list. Once a certificate is issued, the session is deleted automatically.
 | POST | `/api/convert/inspect` | Detect the format and report the contents |
 | POST | `/api/convert/output` | Convert to the selected target format |
 
-`/api/verify` accepts:
+### `/api/check_status`
+
+Returns the current server-side auto-check state for a session. Called by
+the frontend every 3 seconds while a session is active.
 
 ```json
+POST /api/check_status
+{ "session_id": "..." }
+```
+
+```json
+{
+  "success": true,
+  "session_id": "...",
+  "status": "pending",
+  "attempts": 12,
+  "max_attempts": 240,
+  "interval_ms": 30000,
+  "started_at": "2026-10-21T11:18:39+00:00",
+  "last_at": "2026-10-21T11:24:09+00:00",
+  "last_message": "TXT record not published yet: _acme-challenge.test.com"
+}
+```
+
+`status` is one of:
+
+| Status | Meaning |
+|---|---|
+| `pending` | Auto-check is running; a scheduled check is due soon. |
+| `verified` | All TXT records were visible from public resolvers. |
+| `failed` | Attempt limit reached without success. |
+| `stopped` | User paused auto-check via the toggle. |
+| `expired` | Session is older than 7 days; scheduler has given up. |
+| `unknown` | Legacy session without an `auto_check_status` field. |
+
+### `/api/check_auto_toggle`
+
+Enable or pause the background auto-check for a session.
+
+```json
+POST /api/check_auto_toggle
+{ "session_id": "...", "enabled": false }
+```
+
+```json
+{ "success": true, "status": "stopped", "attempts": 12 }
+```
+
+Enabling after a `failed`/`stopped`/`expired` state resets the attempt
+counter to 0 and starts a new window. Enabling after `verified` is rejected
+- there is nothing left to check.
+
+### `/api/verify`
+
+```json
+POST /api/verify
 {
   "certificate": "-----BEGIN CERTIFICATE-----...",
   "chain":       "-----BEGIN CERTIFICATE-----... (optional)",
@@ -380,6 +476,8 @@ the main verification path:
 | `related_to` | Short name of the main-chain node this cert relates to, or `null`. |
 | `relationship` | `"cross_signed"`, `"sibling"`, or `null`. |
 
+### Convert endpoints
+
 Both convert endpoints accept the same input shape:
 
 ```json
@@ -403,15 +501,6 @@ Both convert endpoints accept the same input shape:
 }
 ```
 
-`/api/build_chain` accepts:
-
-```json
-{
-  "certificate": "-----BEGIN CERTIFICATE-----...",
-  "include_root": false
-}
-```
-
 Response for `/api/convert/output`:
 
 ```json
@@ -427,9 +516,20 @@ Response for `/api/convert/output`:
 (downloaded only). Files larger than `CONVERT_MAX_INLINE_TEXT_BYTES` are always
 returned with `text: null`.
 
+### `/api/build_chain`
+
+```json
+POST /api/build_chain
+{
+  "certificate": "-----BEGIN CERTIFICATE-----...",
+  "include_root": false
+}
+```
+
 ## Security notes
 
-- Do not expose it publicly without TLS in front of it (I also recommend protecting the service with authentication).
+- Do not expose it publicly without TLS in front of it (authentication is
+  also strongly recommended).
 - Private keys are written to disk in `certs/` in plain PEM. Protect this
   directory.
 - ACME account keys are stored in `accounts/`. Treat them as secrets.
@@ -448,3 +548,7 @@ returned with `text: null`.
 - Chain building relies on public AIA endpoints and the local CA store. If the
   issuer is only reachable via an internal CA, the chain cannot be completed
   automatically - paste the missing intermediate into the chain field.
+- The server-side auto-check scheduler uses `fcntl.flock` to coordinate
+  between workers. On Windows `fcntl` is unavailable, so multi-worker
+  deployments are not supported there - run with a single worker, or run
+  under WSL / Linux / macOS.
