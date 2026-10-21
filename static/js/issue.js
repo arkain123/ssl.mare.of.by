@@ -252,8 +252,18 @@ async function restoreSession(id) {
             }
             rows.forEach(([fqdn, val]) => {
                 tbody.innerHTML += `<tr>
-                    <td class="copyable" title="Click to copy" onclick="copyCell(this)">${escapeHtml(fqdn)}</td>
-                    <td class="copyable" title="Click to copy" onclick="copyCell(this)">${escapeHtml(val)}</td>
+                    <td class="copyable" data-value="${escapeHtml(fqdn)}">
+                        <span>${escapeHtml(fqdn)}</span>
+                        <button type="button" class="copy-btn" title="Copy" aria-label="Copy" onclick="copyCell(this)">
+                            ${ICON_COPY}
+                        </button>
+                    </td>
+                    <td class="copyable" data-value="${escapeHtml(val)}">
+                        <span>${escapeHtml(val)}</span>
+                        <button type="button" class="copy-btn" title="Copy" aria-label="Copy" onclick="copyCell(this)">
+                            ${ICON_COPY}
+                        </button>
+                    </td>
                 </tr>`;
             });
         }
@@ -333,8 +343,18 @@ async function createRequest() {
         tbody.innerHTML = '';
         data.tokens.forEach(t => {
             tbody.innerHTML += `<tr>
-                <td class="copyable" title="Click to copy" onclick="copyCell(this)">${escapeHtml(t.fqdn)}</td>
-                <td class="copyable" title="Click to copy" onclick="copyCell(this)">${escapeHtml(t.value)}</td>
+                <td class="copyable" data-value="${escapeHtml(t.fqdn)}">
+                    <span>${escapeHtml(t.fqdn)}</span>
+                    <button type="button" class="copy-btn" title="Copy" aria-label="Copy" onclick="copyCell(this)">
+                        ${ICON_COPY}
+                    </button>
+                </td>
+                <td class="copyable" data-value="${escapeHtml(t.value)}">
+                    <span>${escapeHtml(t.value)}</span>
+                    <button type="button" class="copy-btn" title="Copy" aria-label="Copy" onclick="copyCell(this)">
+                        ${ICON_COPY}
+                    </button>
+                </td>
             </tr>`;
         });
 

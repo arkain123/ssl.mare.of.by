@@ -1,3 +1,7 @@
+/* ============ Icons (inline SVG, no external font) ============ */
+const ICON_COPY = '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
+const ICON_CHECK = '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>';
+
 /* ============ Theme ============ */
 const THEME_KEY = 'ssl_tools_theme';
 const systemDark = window.matchMedia('(prefers-color-scheme: dark)');
@@ -164,15 +168,28 @@ function copyText(text) {
     });
 }
 
-function copyCell(cell) {
-    const rawText = cell.textContent;
+function copyCell(el) {
+    const btn = el && el.tagName === 'BUTTON' ? el : null;
+    const cell = btn ? el.closest('td') : el;
+    if (!cell) return;
+
+    const rawText = cell.dataset.value != null
+        ? cell.dataset.value
+        : cell.textContent.trim();
+
     copyText(rawText).then(() => {
-        cell.classList.add('copied');
-        cell.textContent = 'Copied';
-        setTimeout(() => {
-            cell.textContent = rawText;
-            cell.classList.remove('copied');
-        }, 800);
+        if (btn) {
+            const original = btn.innerHTML;
+            btn.classList.add('copied');
+            btn.innerHTML = ICON_CHECK;
+            setTimeout(() => {
+                btn.innerHTML = original;
+                btn.classList.remove('copied');
+            }, 1200);
+        } else {
+            cell.classList.add('copied');
+            setTimeout(() => cell.classList.remove('copied'), 800);
+        }
     }).catch(e => {
         showNotification('Copy failed: ' + e.message, 'error');
     });
