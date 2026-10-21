@@ -29,6 +29,17 @@ Analyze a PEM certificate, optionally together with its chain and private key:
 - optionally include the self-signed root in the output
 - visualize the chain of trust, tolerate cross-signed intermediates and
   out-of-order input
+- classify certificates from the chain input that are not part of the main
+  verification path into three groups and show them in a separate, dimmed
+  section below the main chain:
+  - **cross-signed alternatives** - same subject and public key as a node in
+    the main chain, different issuer (a cross-signed variant of the same CA)
+  - **sibling CAs** - issued by the same authority as some node in the main
+    chain, but a distinct intermediate (different subject)
+  - **unrelated** - no detectable link to the main chain
+- each unused certificate is downloadable as PEM (if the backend provided
+  the payload) and its relationship to the main chain is shown in a
+  dedicated column
 - verify that the private key matches the certificate
 
 ### Check live certificate
@@ -121,9 +132,6 @@ NAMESERVERS=8.8.8.8,1.1.1.1,9.9.9.9
 # Per-resolver DNS query timeout, seconds
 DNS_QUERY_TIMEOUT=3
 
-# Hard wall-clock limit for one query, seconds
-DNS_SUBPROCESS_TIMEOUT=6
-
 # ---------- DNS auto-check (UI polling) ----------
 # Browser polling interval for auto-check, milliseconds
 DNS_AUTO_INTERVAL_MS=30000
@@ -190,7 +198,6 @@ LOG_LEVEL=INFO
 | `ACCOUNT_EMAIL` | — | Contact email registered with the ACME account. |
 | `NAMESERVERS` | `8.8.8.8,1.1.1.1,9.9.9.9` | Resolvers for TXT checks (TCP, tried in order). |
 | `DNS_QUERY_TIMEOUT` | `3` | Per-resolver query timeout, seconds. |
-| `DNS_SUBPROCESS_TIMEOUT` | `6` | Hard limit per one dig/dnspython call. |
 | `DNS_AUTO_INTERVAL_MS` | `30000` | Browser polling interval for auto-check. |
 | `DNS_AUTO_MAX_ATTEMPTS` | `240` | Attempts before auto-check gives up. |
 | `DNS_AUTO_START_DELAY_MS` | `3000` | Delay before first auto-check tick. |
@@ -319,6 +326,59 @@ list. Once a certificate is issued, the session is deleted automatically.
 | GET | `/api/config` | Public runtime configuration for the frontend |
 | POST | `/api/convert/inspect` | Detect the format and report the contents |
 | POST | `/api/convert/output` | Convert to the selected target format |
+
+`/api/verify` accepts:
+
+```json
+{
+  "certificate": "-----BEGIN CERTIFICATE-----...",
+  "chain":       "-----BEGIN CERTIFICATE-----... (optional)",
+  "private_key": "-----BEGIN PRIVATE KEY-----... (optional)"
+}
+```
+
+Response:
+
+```json
+{
+  "success": true,
+  "certificate": { "subject": "...", "issuer": "...", "days_left": 198, ... },
+  "chain": {
+    "length": 1,
+    "links": [{ "from": "leaf CN", "to": "issuer CN", "verified": true }],
+    "nodes": [{ "label": "Leaf", "name": "...", "ok": true }, ...],
+    "certificates": [{ "subject": "...", "issuer": "...", "self_signed": false }],
+    "complete": false,
+    "valid": true,
+    "provided_count": 4,
+    "extra_count": 3,
+    "unused": [
+      {
+        "subject": "GlobalSign GCC R46 DV TLS CA 2025",
+        "issuer": "GlobalSign Root R46",
+        "is_ca": true,
+        "self_signed": false,
+        "pem": "-----BEGIN CERTIFICATE-----\n...",
+        "related_to": "GlobalSign GCC R46 AlphaSSL CA 2025",
+        "relationship": "sibling"
+      }
+    ]
+  },
+  "errors": [],
+  "warnings": []
+}
+```
+
+`chain.unused` describes every provided certificate that did not end up on
+the main verification path:
+
+| Field | Meaning |
+|---|---|
+| `subject` / `issuer` | Short names (CN). |
+| `self_signed` | Subject equals issuer and signature verifies with own key. |
+| `pem` | The certificate in PEM (used by the download button). |
+| `related_to` | Short name of the main-chain node this cert relates to, or `null`. |
+| `relationship` | `"cross_signed"`, `"sibling"`, or `null`. |
 
 Both convert endpoints accept the same input shape:
 
