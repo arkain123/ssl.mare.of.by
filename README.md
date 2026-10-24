@@ -239,7 +239,7 @@ and should never be committed.
 ## Usage
 
 ```bash
-python app.py
+python -m app.app
 ```
 
 Then open `http://<FLASK_HOST>:<FLASK_PORT>` in a browser (by default,
@@ -326,28 +326,38 @@ file are deleted automatically.
 
 ```
 .
-├── app.py                    # Flask app and HTTP routes
-├── acme_manager.py           # ACME client wrapper + DNS auto-check scheduler
-├── verifier.py               # Certificate parsing, chain verification/building
-├── converter.py              # Format detection, parsing, and serialization
-├── dns_check.py              # TXT resolution via public resolvers (TCP)
-├── session_store.py          # Persistence of pending ACME sessions
-├── globalsign_catalog.py     # Bundled GlobalSign intermediate catalog
+├── app/                          # Flask application package
+│   ├── app.py                    # Flask app and HTTP routes
+│   ├── acme_manager.py           # ACME client wrapper + DNS auto-check scheduler
+│   ├── verifier.py               # Certificate parsing, chain verification/building
+│   ├── converter.py              # Format detection, parsing, and serialization
+│   ├── dns_check.py              # TXT resolution via public resolvers (TCP)
+│   ├── session_store.py          # Persistence of pending ACME sessions
+│   └── globalsign_catalog.py     # Bundled GlobalSign intermediate catalog
+├── tests/                        # Pytest test suite
+│   ├── test_app.py
+│   ├── test_acme_manager.py
+│   ├── test_converter.py
+│   ├── test_dns_check.py
+│   ├── test_globalsign_catalog.py
+│   ├── test_session_store.py
+│   └── test_verifier.py
 ├── templates/
-│   └── index.html            # Single-page UI
+│   └── index.html                # Single-page UI
 ├── static/
-│   ├── style.css             # Theme + layout
+│   ├── style.css                 # Theme + layout
 │   └── js/
-│       ├── core.js           # Theme, tabs, shared helpers, inline SVG icons
-│       ├── issue.js          # ACME + auto-check polling
-│       ├── verify.js         # Verify + build chain + live check
-│       ├── convert.js        # Convert + GlobalSign injector
-│       └── app.js            # Bootstrap
-├── globalsign_intermediates/ # PEM files for the GlobalSign catalog
-├── .env.example              # Template for local configuration
-├── accounts/                 # ACME account state (created at runtime)
-├── certs/                    # Issued certificates (created at runtime)
-└── sessions/                 # Pending sessions + per-session lock files
+│       ├── core.js               # Theme, tabs, shared helpers, inline SVG icons
+│       ├── issue.js              # ACME + auto-check polling
+│       ├── verify.js             # Verify + build chain + live check
+│       ├── convert.js            # Convert + GlobalSign injector
+│       └── app.js                # Frontend entrypoint
+├── globalsign_intermediates/     # PEM files for the GlobalSign catalog
+├── .env.example                  # Template for local configuration
+├── pytest.ini                    # Pytest configuration
+├── requirements.txt              # Python dependencies
+├── LICENSE
+└── README.md
 ```
 
 ## API
