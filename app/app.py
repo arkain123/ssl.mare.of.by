@@ -3,12 +3,13 @@ import sys
 import uuid
 import base64
 import logging
+from pathlib import Path
 from flask import Flask, request, jsonify, render_template
 from datetime import datetime, timezone
-from acme_manager import ACMEManager
-from converter import parse_anything, serialize_bundle, bundle_summary, PKCS12_TARGETS
-from globalsign_catalog import grouped_catalog
-from verifier import verify_inputs, fetch_remote_certificate, build_certificate_chain
+from .acme_manager import ACMEManager
+from .converter import parse_anything, serialize_bundle, bundle_summary, PKCS12_TARGETS
+from .globalsign_catalog import grouped_catalog
+from .verifier import verify_inputs, fetch_remote_certificate, build_certificate_chain
 
 
 logging.basicConfig(
@@ -22,7 +23,14 @@ logger = logging.getLogger(__name__)
 CONVERT_MAX_INLINE_TEXT_BYTES = int(os.getenv("CONVERT_MAX_INLINE_TEXT_BYTES", "65536"))
 CONVERT_MAX_UPLOAD_MB = int(os.getenv("CONVERT_MAX_UPLOAD_MB", "10"))
 
-app = Flask(__name__)
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+app = Flask(
+    __name__,
+    template_folder=str(PROJECT_ROOT / "templates"),
+    static_folder=str(PROJECT_ROOT / "static"),
+
+)
 app.config["MAX_CONTENT_LENGTH"] = CONVERT_MAX_UPLOAD_MB * 1024 * 1024
 manager = ACMEManager()
 
@@ -128,7 +136,7 @@ def api_check():
     success, message = manager.check_dns(session_id)
 
     if success:
-        import session_store
+        from . import session_store
         sess = session_store.load_session(session_id)
         if sess and sess.get("auto_check_status") == "pending":
             sess["auto_check_status"] = "verified"
@@ -191,7 +199,7 @@ def api_check_status():
     if not session_id:
         return jsonify({"error": "Missing session_id"}), 400
 
-    import session_store
+    from . import session_store
     session = session_store.load_session(session_id)
     if not session:
         return jsonify({"success": False, "error": "Session not found"}), 404
@@ -217,7 +225,7 @@ def api_check_auto_toggle():
     if not session_id:
         return jsonify({"error": "Missing session_id"}), 400
 
-    import session_store
+    from . import session_store
     session = session_store.load_session(session_id)
     if not session:
         return jsonify({"success": False, "error": "Session not found"}), 404
@@ -268,7 +276,7 @@ def _session_public(session, session_id):
 
 @app.route("/api/sessions", methods=["GET"])
 def api_sessions_list():
-    import session_store
+    from . import session_store
     metas = session_store.list_metadata()
     logger.info("[api/sessions] returning %d session(s)", len(metas))
     return jsonify({"success": True, "sessions": metas})
@@ -279,7 +287,7 @@ def api_session_get(session_id):
     session = manager.sessions.get(session_id)
 
     if not session:
-        import session_store
+        from . import session_store
         loaded = session_store.load_session(session_id)
         if not loaded:
             return jsonify({"success": False, "error": "Session not found"}), 404
@@ -288,7 +296,7 @@ def api_session_get(session_id):
         # /api/check and /api/issue work on any device / after restart.
         if not loaded.get("client") and loaded.get("client_state"):
             try:
-                from acme_manager import _client_from_state
+                from .acme_manager import _client_from_state
                 client = _client_from_state(loaded["client_state"])
                 if client:
                     loaded["client"] = client
@@ -308,7 +316,7 @@ def api_session_get(session_id):
 
 @app.route("/api/sessions/<session_id>", methods=["DELETE"])
 def api_session_delete(session_id):
-    import session_store
+    from . import session_store
     manager.sessions.pop(session_id, None)
     session_store.delete_session(session_id)
     logger.info("[api/sessions/%s] deleted", session_id)

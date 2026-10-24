@@ -8,8 +8,8 @@ from cryptography.hazmat.primitives import serialization
 from cryptography import x509
 
 from simple_acme_dns import ACMEClient
-from dns_check import resolve_txt_records
-import session_store
+from .dns_check import resolve_txt_records
+from . import session_store
 
 try:
     import fcntl
